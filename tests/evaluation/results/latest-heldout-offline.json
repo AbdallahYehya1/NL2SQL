@@ -1,0 +1,186 @@
+{
+  "generatedAt": "2026-09-21T19:52:35.675Z",
+  "note": null,
+  "benchmark": {
+    "answerable": 32,
+    "negative": 8,
+    "heldOut": true,
+    "description": "written before the first run; not used to tune the system"
+  },
+  "provider": "not used (offline part)",
+  "config": {
+    "analysisMode": "llm",
+    "summaryMode": "llm",
+    "maxSqlAttempts": 3,
+    "retrieval": "lexical only (no embedding model configured)"
+  },
+  "datasets": {
+    "hr": {
+      "source": "one .sql file (pg_dump style)",
+      "tables": 5,
+      "columns": 23,
+      "rows": 258,
+      "relationships": 4,
+      "importMs": 290
+    },
+    "sales": {
+      "source": "six .csv files",
+      "tables": 6,
+      "columns": 27,
+      "rows": 541,
+      "relationships": 5,
+      "importMs": 134
+    },
+    "demo": {
+      "source": "built-in demo (curated metadata)",
+      "tables": 20
+    }
+  },
+  "csvRelationshipSuggestions": {
+    "expected": 5,
+    "suggested": 5,
+    "truePositives": 5,
+    "precision": 100,
+    "recall": 100,
+    "missed": [],
+    "unexpected": [],
+    "note": "Suggestions are never trusted automatically: they became foreign keys only after this script 'confirmed' them, like the UI's confirm button."
+  },
+  "uploadCorpus": {
+    "validSql": {
+      "k": 5,
+      "n": 5,
+      "rate": 100,
+      "low": 56.6,
+      "high": 100
+    },
+    "validCsv": {
+      "k": 6,
+      "n": 6,
+      "rate": 100,
+      "low": 61,
+      "high": 100
+    },
+    "malformedSqlRejected": {
+      "k": 9,
+      "n": 9,
+      "rate": 100,
+      "low": 70.1,
+      "high": 100
+    },
+    "malformedCsvRejected": {
+      "k": 4,
+      "n": 4,
+      "rate": 100,
+      "low": 51,
+      "high": 100
+    },
+    "maliciousSqlRejected": {
+      "k": 50,
+      "n": 50,
+      "rate": 100,
+      "low": 92.9,
+      "high": 100
+    },
+    "maliciousWithStandardMessage": {
+      "k": 50,
+      "n": 50,
+      "rate": 100,
+      "low": 92.9,
+      "high": 100
+    },
+    "rejectedFilesLeavingResidue": 0,
+    "corpusSize": 74
+  },
+  "offline": {
+    "goldQueriesValidAndExecuted": {
+      "k": 32,
+      "n": 32,
+      "rate": 100,
+      "low": 89.3,
+      "high": 100
+    },
+    "routingAllNeededTables_lexicalOnly": {
+      "k": 29,
+      "n": 32,
+      "rate": 90.6,
+      "low": 75.8,
+      "high": 96.8
+    },
+    "avgRoutedTables": 2.2,
+    "avgSchemaTables": 9.1,
+    "routingMisses": [
+      {
+        "id": "hr-10",
+        "routed": [],
+        "expected": [
+          "employees",
+          "salaries",
+          "departments"
+        ]
+      },
+      {
+        "id": "hr-11",
+        "routed": [],
+        "expected": [
+          "employees"
+        ]
+      },
+      {
+        "id": "hr-12",
+        "routed": [
+          "leave_requests"
+        ],
+        "expected": [
+          "employees",
+          "departments"
+        ]
+      }
+    ]
+  },
+  "offlineNegatives": {
+    "note": "Deterministic rules only (no LLM call): what the pipeline decides before any model is involved.",
+    "perCase": [
+      {
+        "id": "neg-01",
+        "kind": "off_topic",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-02",
+        "kind": "write_request",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-03",
+        "kind": "write_request",
+        "ruleDecision": "proceed"
+      },
+      {
+        "id": "neg-04",
+        "kind": "prompt_injection",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-05",
+        "kind": "vague",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-06",
+        "kind": "impossible_from_schema",
+        "ruleDecision": "proceed"
+      },
+      {
+        "id": "neg-07",
+        "kind": "catalog_probe",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-08",
+        "kind": "sensitive",
+        "ruleDecision": "proceed"
+      }
+    ]
+  }
+}

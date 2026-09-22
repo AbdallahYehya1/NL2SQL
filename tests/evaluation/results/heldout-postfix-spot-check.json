@@ -1,0 +1,417 @@
+{
+  "generatedAt": "2026-09-21T19:49:17.197Z",
+  "note": "Post-analysis spot check of the two held-out misses after the generic 'who' fix. NOT a held-out result.",
+  "benchmark": {
+    "answerable": 32,
+    "negative": 8,
+    "heldOut": true,
+    "description": "written before the first run; not used to tune the system"
+  },
+  "provider": "custom/openai",
+  "config": {
+    "analysisMode": "llm",
+    "summaryMode": "llm",
+    "maxSqlAttempts": 3,
+    "retrieval": "lexical only (no embedding model configured)"
+  },
+  "datasets": {
+    "hr": {
+      "source": "one .sql file (pg_dump style)",
+      "tables": 5,
+      "columns": 23,
+      "rows": 258,
+      "relationships": 4,
+      "importMs": 247
+    },
+    "sales": {
+      "source": "six .csv files",
+      "tables": 6,
+      "columns": 27,
+      "rows": 541,
+      "relationships": 5,
+      "importMs": 122
+    },
+    "demo": {
+      "source": "built-in demo (curated metadata)",
+      "tables": 20
+    }
+  },
+  "csvRelationshipSuggestions": {
+    "expected": 5,
+    "suggested": 5,
+    "truePositives": 5,
+    "precision": 100,
+    "recall": 100,
+    "missed": [],
+    "unexpected": [],
+    "note": "Suggestions are never trusted automatically: they became foreign keys only after this script 'confirmed' them, like the UI's confirm button."
+  },
+  "uploadCorpus": {
+    "validSql": {
+      "k": 5,
+      "n": 5,
+      "rate": 100,
+      "low": 56.6,
+      "high": 100
+    },
+    "validCsv": {
+      "k": 6,
+      "n": 6,
+      "rate": 100,
+      "low": 61,
+      "high": 100
+    },
+    "malformedSqlRejected": {
+      "k": 9,
+      "n": 9,
+      "rate": 100,
+      "low": 70.1,
+      "high": 100
+    },
+    "malformedCsvRejected": {
+      "k": 4,
+      "n": 4,
+      "rate": 100,
+      "low": 51,
+      "high": 100
+    },
+    "maliciousSqlRejected": {
+      "k": 50,
+      "n": 50,
+      "rate": 100,
+      "low": 92.9,
+      "high": 100
+    },
+    "maliciousWithStandardMessage": {
+      "k": 50,
+      "n": 50,
+      "rate": 100,
+      "low": 92.9,
+      "high": 100
+    },
+    "rejectedFilesLeavingResidue": 0,
+    "corpusSize": 74
+  },
+  "offline": {
+    "goldQueriesValidAndExecuted": {
+      "k": 32,
+      "n": 32,
+      "rate": 100,
+      "low": 89.3,
+      "high": 100
+    },
+    "routingAllNeededTables_lexicalOnly": {
+      "k": 29,
+      "n": 32,
+      "rate": 90.6,
+      "low": 75.8,
+      "high": 96.8
+    },
+    "avgRoutedTables": 2.2,
+    "avgSchemaTables": 9.1,
+    "routingMisses": [
+      {
+        "id": "hr-10",
+        "routed": [],
+        "expected": [
+          "employees",
+          "salaries",
+          "departments"
+        ]
+      },
+      {
+        "id": "hr-11",
+        "routed": [],
+        "expected": [
+          "employees"
+        ]
+      },
+      {
+        "id": "hr-12",
+        "routed": [
+          "leave_requests"
+        ],
+        "expected": [
+          "employees",
+          "departments"
+        ]
+      }
+    ]
+  },
+  "offlineNegatives": {
+    "note": "Deterministic rules only (no LLM call): what the pipeline decides before any model is involved.",
+    "perCase": [
+      {
+        "id": "neg-01",
+        "kind": "off_topic",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-02",
+        "kind": "write_request",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-03",
+        "kind": "write_request",
+        "ruleDecision": "proceed"
+      },
+      {
+        "id": "neg-04",
+        "kind": "prompt_injection",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-05",
+        "kind": "vague",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-06",
+        "kind": "impossible_from_schema",
+        "ruleDecision": "proceed"
+      },
+      {
+        "id": "neg-07",
+        "kind": "catalog_probe",
+        "ruleDecision": "out_of_scope"
+      },
+      {
+        "id": "neg-08",
+        "kind": "sensitive",
+        "ruleDecision": "proceed"
+      }
+    ]
+  },
+  "live": {
+    "provider": "custom/openai",
+    "cases": 2,
+    "endToEnd_resultCorrect": {
+      "k": 1,
+      "n": 2,
+      "rate": 50,
+      "low": 9.5,
+      "high": 90.5
+    },
+    "routing_allNeededTablesInSubSchema": {
+      "k": 1,
+      "n": 2,
+      "rate": 50,
+      "low": 9.5,
+      "high": 90.5
+    },
+    "avgSubSchemaTables": 1,
+    "sqlGenerated": {
+      "k": 1,
+      "n": 2,
+      "rate": 50,
+      "low": 9.5,
+      "high": 90.5
+    },
+    "sqlValid_firstAttempt_ofGenerated": {
+      "k": 1,
+      "n": 1,
+      "rate": 100,
+      "low": 20.7,
+      "high": 100
+    },
+    "executionSuccess_ofAll": {
+      "k": 1,
+      "n": 2,
+      "rate": 50,
+      "low": 9.5,
+      "high": 90.5
+    },
+    "executionSuccess_ofGenerated": {
+      "k": 1,
+      "n": 1,
+      "rate": 100,
+      "low": 20.7,
+      "high": 100
+    },
+    "resultCorrect_ofExecuted": {
+      "k": 1,
+      "n": 1,
+      "rate": 100,
+      "low": 20.7,
+      "high": 100
+    },
+    "firstAttemptSuccess": {
+      "k": 1,
+      "n": 2,
+      "rate": 50,
+      "low": 9.5,
+      "high": 90.5
+    },
+    "acceptedViaAlternativeGold": [],
+    "naturalSelfCorrection": {
+      "note": "Only failures that occurred naturally (no fault injection). Reported as counts, not as a rate, when small.",
+      "casesThatNeededCorrection": 0,
+      "repairedToCorrectResult": 0,
+      "details": []
+    },
+    "failureBreakdown": {
+      "declinedAnswerableQuestion": [
+        "demo-07:out_of_scope"
+      ],
+      "providerErrors": [],
+      "sqlFailures": [],
+      "wrongResult": []
+    },
+    "byCategory": {
+      "ambiguous_phrasing": {
+        "cases": 2,
+        "resultCorrect": {
+          "k": 1,
+          "n": 2,
+          "rate": 50,
+          "low": 9.5,
+          "high": 90.5
+        },
+        "routing": {
+          "k": 1,
+          "n": 2,
+          "rate": 50,
+          "low": 9.5,
+          "high": 90.5
+        }
+      }
+    },
+    "byDataset": {
+      "hr": {
+        "cases": 1,
+        "resultCorrect": {
+          "k": 1,
+          "n": 1,
+          "rate": 100,
+          "low": 20.7,
+          "high": 100
+        },
+        "routing": {
+          "k": 1,
+          "n": 1,
+          "rate": 100,
+          "low": 20.7,
+          "high": 100
+        }
+      },
+      "demo": {
+        "cases": 1,
+        "resultCorrect": {
+          "k": 0,
+          "n": 1,
+          "rate": 0,
+          "low": 0,
+          "high": 79.3
+        },
+        "routing": {
+          "k": 0,
+          "n": 1,
+          "rate": 0,
+          "low": 0,
+          "high": 79.3
+        }
+      }
+    },
+    "negatives": {
+      "noAnswerProduced": {
+        "k": 0,
+        "n": 0,
+        "rate": null,
+        "low": null,
+        "high": null
+      },
+      "refusedByDesign": {
+        "k": 0,
+        "n": 0,
+        "rate": null,
+        "low": null,
+        "high": null
+      },
+      "databaseUnchanged": true,
+      "before": {
+        "hr": {
+          "e": 72,
+          "s": 72
+        },
+        "sales": {
+          "o": 150,
+          "c": 40
+        },
+        "demo": {
+          "c": 1800,
+          "o": 11048
+        },
+        "tables": 31
+      },
+      "after": {
+        "hr": {
+          "e": 72,
+          "s": 72
+        },
+        "sales": {
+          "o": 150,
+          "c": 40
+        },
+        "demo": {
+          "c": 1800,
+          "o": 11048
+        },
+        "tables": 31
+      },
+      "details": []
+    },
+    "latencyMs": {
+      "p50": 63145,
+      "p95": 63145
+    },
+    "avgLlmCalls": 1.5,
+    "perCase": [
+      {
+        "id": "hr-11",
+        "dataset": "hr",
+        "category": "ambiguous_phrasing",
+        "question": "Who has been at the company the longest?",
+        "status": "success",
+        "routingRecall": true,
+        "routedTables": [
+          "employees",
+          "leave_requests"
+        ],
+        "expectedTables": [
+          "employees"
+        ],
+        "sqlGenerated": true,
+        "firstAttemptValid": true,
+        "executed": true,
+        "resultMatch": true,
+        "matchedBy": "gold",
+        "attempts": 1,
+        "naturalCorrections": [],
+        "latencyMs": 63145,
+        "llmCalls": 2,
+        "sql": "WITH earliest AS (\n  SELECT MIN(hire_date) AS min_date\n  FROM employees\n)\nSELECT\n  e.id,\n  e.full_name AS full_name,\n  e.email AS email,\n  e.hire_date AS hire_date,\n  e.department_id AS department_id,\n  e.job_title_id AS job_title_id,\n  e.status AS status\nFROM employees e\nJOIN earliest ON e.hire_date = earliest.min_date\nORDER BY e.hire_date ASC, e.id ASC"
+      },
+      {
+        "id": "demo-07",
+        "dataset": "demo",
+        "category": "ambiguous_phrasing",
+        "question": "Which brands come from Japan?",
+        "status": "out_of_scope",
+        "routingRecall": false,
+        "routedTables": [],
+        "expectedTables": [
+          "product_brands"
+        ],
+        "sqlGenerated": false,
+        "firstAttemptValid": null,
+        "executed": false,
+        "resultMatch": null,
+        "attempts": 0,
+        "naturalCorrections": [],
+        "latencyMs": 282,
+        "llmCalls": 1
+      }
+    ]
+  }
+}

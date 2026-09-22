@@ -1,0 +1,33 @@
+{
+  "generatedAt": "2026-09-21T19:52:33.811Z",
+  "benchmarkQuestions": 39,
+  "offline": {
+    "routing": {
+      "cases": 39,
+      "tableRecallAllFound": 100,
+      "avgPrecision": 0.816,
+      "avgSubSchemaTables": 2.7,
+      "totalTables": 20,
+      "metricRecognition": 92,
+      "misses": []
+    },
+    "unsafeSqlRejection": {
+      "total": 64,
+      "rejected": 64,
+      "rate": 100,
+      "notRejected": []
+    },
+    "goldQueries": {
+      "total": 39,
+      "valid": 39,
+      "rate": 100,
+      "failures": []
+    },
+    "deterministicScopeAndAmbiguity": {
+      "total": 8,
+      "correct": 8,
+      "rate": 100,
+      "failures": []
+    }
+  }
+}

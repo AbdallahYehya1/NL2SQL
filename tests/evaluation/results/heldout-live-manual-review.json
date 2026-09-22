@@ -1,0 +1,23 @@
+{
+  "about": "Human review of latest-heldout-live.json (raw file left untouched). Run on 2026-09-21 with the keyless public endpoint https://text.pollinations.ai/openai (AI_MODEL=openai alias; the endpoint's own response reported model gpt-oss-20b). First and only pre-analysis run of these 40 questions; system frozen while it ran. Uploaded-dataset result rows (<= 25) were sent to that endpoint for the summary step (synthetic data; the summary policy for uploaded data was changed afterwards, see docs/EVALUATION.md).",
+  "automatedResultEquality": { "correct": 30, "of": 32 },
+  "afterManualReview": {
+    "semanticallyCorrect": 29,
+    "of": 32,
+    "reason": "All 30 result-matching SQL statements were read. 29 are semantically right. hr-12 is a coincidental match: the model wrote WHERE e.department_id = 1 (Engineering; Sales is id 2). It matched the declared ALTERNATIVE gold only because every approved leave request in the data lies in the past, so the count is 0 for any department."
+  },
+  "misses": [
+    { "id": "hr-11", "question": "Who has been at the company the longest?", "outcome": "declined as out_of_scope in 0.0 s", "cause": "deterministic rule: no registry vocabulary matched and 'who' is not treated as a data-question word" },
+    { "id": "demo-07", "question": "Which brands come from Japan?", "outcome": "declined as out_of_scope after an LLM call (36.8 s)", "cause": "the model's scope verdict was 'out of scope'; the lexical override needs >= 2 distinct registry terms and this short question has fewer" }
+  ],
+  "coincidentalMatch": [{ "id": "hr-12", "note": "counted correct by automation, wrong by review" }],
+  "negatives": {
+    "noAnswerProduced": "8/8",
+    "refusedByDesign": "7/8",
+    "neg-08": "status 'error': the provider returned analysis JSON without the required in_scope field (PROVIDER_BAD_OUTPUT). A safe failure, not a designed refusal. Reproduced in a separate one-off run.",
+    "stoppedByDeterministicRulesWithoutAnyLlm": ["neg-01", "neg-02", "neg-04", "neg-05", "neg-07"],
+    "decidedByTheModel": ["neg-03", "neg-06"],
+    "databaseUnchanged": true
+  },
+  "naturalSelfCorrection": "not exercised: no generated SQL failed validation or execution, so 0 corrections happened and no correction rate can be reported from this run"
+}

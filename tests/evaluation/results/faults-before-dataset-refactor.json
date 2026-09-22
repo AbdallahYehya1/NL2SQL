@@ -1,0 +1,201 @@
+{
+  "generatedAt": "2026-09-21T15:05:23.411Z",
+  "benchmarkQuestions": 39,
+  "offline": {
+    "routing": {
+      "cases": 39,
+      "tableRecallAllFound": 100,
+      "avgPrecision": 0.816,
+      "avgSubSchemaTables": 2.7,
+      "totalTables": 20,
+      "metricRecognition": 92,
+      "misses": []
+    },
+    "unsafeSqlRejection": {
+      "total": 64,
+      "rejected": 64,
+      "rate": 100,
+      "notRejected": []
+    },
+    "goldQueries": {
+      "total": 39,
+      "valid": 39,
+      "rate": 100,
+      "failures": []
+    },
+    "deterministicScopeAndAmbiguity": {
+      "total": 8,
+      "correct": 8,
+      "rate": 100,
+      "failures": []
+    }
+  },
+  "faultInjection": {
+    "provider": "custom/openai",
+    "note": "The first failure in each case is deliberately injected into known-good gold SQL; the repair is done by the real correction agent against the real validator/database error.",
+    "injected": 12,
+    "actuallyFailedFirstAttempt": 12,
+    "repaired": 10,
+    "repairedAndCorrect": 10,
+    "repairRate": 83.3,
+    "correctRepairRate": 83.3,
+    "byFault": {
+      "hallucinated column": {
+        "total": 3,
+        "repairedAndCorrect": 2
+      },
+      "hallucinated table": {
+        "total": 2,
+        "repairedAndCorrect": 2
+      },
+      "forbidden function": {
+        "total": 2,
+        "repairedAndCorrect": 2
+      },
+      "type error (ROUND on float8)": {
+        "total": 2,
+        "repairedAndCorrect": 1
+      },
+      "missing GROUP BY": {
+        "total": 1,
+        "repairedAndCorrect": 1
+      },
+      "syntax error": {
+        "total": 2,
+        "repairedAndCorrect": 2
+      }
+    },
+    "runs": [
+      {
+        "case": "top-products-revenue",
+        "fault": "hallucinated column",
+        "injected": "SELECT p.name_value, ROUND(SUM(oi.line_total)::numeric, 2) AS revenue FROM order_items oi JOIN orders o ON o.order_id = oi.order_id JOIN products p ON p.product_id = oi.product_id WHERE o.status IN ('shipped','delivered') GROUP BY p.product_id, p.name ORDER BY revenue DESC LIMIT 5",
+        "firstError": "validation:UNKNOWN_COLUMN",
+        "repaired": false,
+        "matches": null,
+        "attempts": 1,
+        "latencyMs": 27233
+      },
+      {
+        "case": "top-categories-last-month",
+        "fault": "hallucinated table",
+        "injected": "SELECT c.name AS category, ROUND(SUM(oi.line_total)::numeric, 2) AS revenue FROM order_items_summary oi JOIN orders o ON o.order_id = oi.order_id JOIN products p ON p.product_id = oi.product_id JOIN product_categories c ON c.category_id = p.category_id WHERE o.status IN ('shipped','delivered') AND o.order_date >= date_trunc('month', CURRENT_DATE) - interval '1 month' AND o.order_date < date_trunc('month', CURRENT_DATE) GROUP BY c.category_id, c.name ORDER BY revenue DESC LIMIT 5",
+        "firstError": "validation:UNKNOWN_TABLE",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The query referenced a non‑existent table \"order_items_summary\". The correct table for line items is \"order_items\".",
+        "latencyMs": 21087
+      },
+      {
+        "case": "revenue-by-city",
+        "fault": "forbidden function",
+        "injected": "SELECT a.city, ROUND_HALF_EVEN(SUM(oi.line_total)::numeric, 2) AS revenue FROM orders o JOIN order_items oi ON oi.order_id = o.order_id JOIN customer_addresses a ON a.address_id = o.shipping_address_id WHERE o.status IN ('shipped','delivered') GROUP BY a.city ORDER BY revenue DESC LIMIT 10",
+        "firstError": "validation:FORBIDDEN_FUNCTION",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The query used the non‑standard function ROUND_HALF_EVEN, which is not allowed in the permitted function set. Replacing it with the standard ROUND function resolves the error.",
+        "latencyMs": 27467
+      },
+      {
+        "case": "aov-last-month",
+        "fault": "type error (ROUND on float8)",
+        "injected": "SELECT ROUND(AVG(o.total_amount)::float8, 2) AS average_order_value FROM orders o WHERE o.status IN ('shipped','delivered') AND o.order_date >= date_trunc('month', CURRENT_DATE) - interval '1 month' AND o.order_date < date_trunc('month', CURRENT_DATE)",
+        "firstError": "execution:42883",
+        "repaired": false,
+        "matches": null,
+        "attempts": 1,
+        "latencyMs": 32143
+      },
+      {
+        "case": "category-growth",
+        "fault": "missing GROUP BY",
+        "injected": "SELECT c.name AS category,\n       ROUND(100.0 * (SUM(oi.line_total) FILTER (WHERE o.order_date >= date_trunc('month', CURRENT_DATE) - interval '1 month' AND o.order_date < date_trunc('month', CURRENT_DATE))\n         - SUM(oi.line_total) FILTER (WHERE o.order_date >= date_trunc('month', CURRENT_DATE) - interval '2 month' AND o.order_date < date_trunc('month', CURRENT_DATE) - interval '1 month'))\n         / NULLIF(SUM(oi.line_total) FILTER (WHERE o.order_date >= date_trunc('month', CURRENT_DATE) - interval '2 month' AND o.order_date < date_trunc('month', CURRENT_DATE) - interval '1 month'), 0), 2) AS growth_pct\n     FROM order_items oi JOIN orders o ON o.order_id = oi.order_id JOIN products p ON p.product_id = oi.product_id JOIN product_categories c ON c.category_id = p.category_id\n     WHERE o.status IN ('shipped','delivered') AND o.order_date >= date_trunc('month', CURRENT_DATE) - interval '2 month' AND o.order_date < date_trunc('month', CURRENT_DATE) ORDER BY growth_pct DESC NULLS LAST LIMIT 1",
+        "firstError": "execution:42803",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The SELECT references c.name without a GROUP BY clause, causing a 42803 error.",
+        "latencyMs": 15576
+      },
+      {
+        "case": "repeat-customers",
+        "fault": "syntax error",
+        "injected": "SELECT COUNT(*) AS customers FROM (SELECT o.customer_id FROM orders o WHERE AND o.status IN ('shipped','delivered') GROUP BY o.customer_id HAVING COUNT(*) > 3) t",
+        "firstError": "validation:PARSE_ERROR",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The subquery had an extraneous 'AND' in the WHERE clause, causing a syntax error. Additionally, the business rule requires counting distinct order IDs, not all rows.",
+        "latencyMs": 21765
+      },
+      {
+        "case": "low-stock-products",
+        "fault": "hallucinated column",
+        "injected": "SELECT p.name_value, w.name AS warehouse, wi.quantity_on_hand, wi.reorder_level FROM warehouse_inventory wi JOIN products p ON p.product_id = wi.product_id JOIN warehouses w ON w.warehouse_id = wi.warehouse_id WHERE wi.quantity_on_hand <= wi.reorder_level ORDER BY wi.quantity_on_hand ASC",
+        "firstError": "validation:UNKNOWN_COLUMN",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The query referenced a non‑existent column \"name_value\" on the products table and joined to a non‑existent warehouses table.",
+        "latencyMs": 29680
+      },
+      {
+        "case": "supplier-most-products",
+        "fault": "hallucinated table",
+        "injected": "SELECT s.name AS supplier, COUNT(p.product_id) AS product_count FROM suppliers_summary s JOIN products p ON p.supplier_id = s.supplier_id GROUP BY s.supplier_id, s.name ORDER BY product_count DESC, s.name LIMIT 1",
+        "firstError": "validation:UNKNOWN_TABLE",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The query referenced a non‑existent table `suppliers_summary`. The correct table to use is `suppliers`.",
+        "latencyMs": 27459
+      },
+      {
+        "case": "monthly-revenue-trend",
+        "fault": "forbidden function",
+        "injected": "SELECT date_trunc('month', o.order_date)::date AS month, ROUND_HALF_EVEN(SUM(oi.line_total)::numeric, 2) AS revenue FROM orders o JOIN order_items oi ON oi.order_id = o.order_id WHERE o.status IN ('shipped','delivered') AND o.order_date >= date_trunc('month', CURRENT_DATE) - interval '6 month' AND o.order_date < date_trunc('month', CURRENT_DATE) GROUP BY 1 ORDER BY 1",
+        "firstError": "validation:FORBIDDEN_FUNCTION",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The query used the non‑standard function ROUND_HALF_EVEN, which is forbidden. Replace it with the standard ROUND function.",
+        "latencyMs": 63817
+      },
+      {
+        "case": "promotion-most-revenue",
+        "fault": "type error (ROUND on float8)",
+        "injected": "SELECT pr.code, ROUND(SUM(oi.line_total)::float8, 2) AS revenue FROM promotions pr JOIN orders o ON o.promotion_id = pr.promotion_id JOIN order_items oi ON oi.order_id = o.order_id WHERE o.status IN ('shipped','delivered') GROUP BY pr.promotion_id, pr.code ORDER BY revenue DESC LIMIT 1",
+        "firstError": "execution:42883",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The ROUND function was called with a double precision value and an integer precision argument, which PostgreSQL does not support. The SUM of line_total is numeric, so casting to float8 caused the error.",
+        "latencyMs": 29845
+      },
+      {
+        "case": "refund-percentage",
+        "fault": "syntax error",
+        "injected": "SELECT ROUND(100.0 * COUNT(DISTINCT r.order_id) / COUNT(DISTINCT o.order_id), 2) AS refund_rate_pct FROM orders o LEFT JOIN refunds r ON r.order_id = o.order_id WHERE AND o.status IN ('shipped','delivered')",
+        "firstError": "validation:PARSE_ERROR",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The query had an extraneous 'AND' in the WHERE clause, causing a syntax error. Additionally, division by zero should be guarded.",
+        "latencyMs": 8569
+      },
+      {
+        "case": "revenue-last-year",
+        "fault": "hallucinated column",
+        "injected": "SELECT ROUND(SUM(oi.line_total_value)::numeric, 2) AS revenue FROM orders o JOIN order_items oi ON oi.order_id = o.order_id WHERE o.status IN ('shipped','delivered') AND o.order_date >= date_trunc('year', CURRENT_DATE) - interval '1 year' AND o.order_date < date_trunc('year', CURRENT_DATE)",
+        "firstError": "validation:UNKNOWN_COLUMN",
+        "repaired": true,
+        "matches": true,
+        "attempts": 2,
+        "diagnosis": "The query referenced a non‑existent column \"line_total_value\" in the order_items table; the correct column name is \"line_total\".",
+        "latencyMs": 32404
+      }
+    ]
+  }
+}

@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/* Design tokens. Light by default, dark via the user's system preference. */
+:root {
+  --background: #f7f8fa;
+  --foreground: #14171f;
+  --card: #ffffff;
+  --card-foreground: #14171f;
+  --muted: #eef0f4;
+  --muted-foreground: #5b6474;
+  --border: #dfe3ea;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-foreground: #ffffff;
+  --accent: #eef2ff;
+  --accent-foreground: #3730a3;
+  --success: #15803d;
+  --success-bg: #ecfdf3;
+  --warning: #b45309;
+  --warning-bg: #fffbeb;
+  --danger: #b91c1c;
+  --danger-bg: #fef2f2;
+  --code-bg: #0f172a;
+  --code-fg: #e2e8f0;
+  --ring: #6366f1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b0d12;
+    --foreground: #e7e9ee;
+    --card: #14171f;
+    --card-foreground: #e7e9ee;
+    --muted: #1b1f29;
+    --muted-foreground: #9aa3b2;
+    --border: #262b37;
+    --primary: #6366f1;
+    --primary-hover: #818cf8;
+    --primary-foreground: #ffffff;
+    --accent: #1e1b4b;
+    --accent-foreground: #c7d2fe;
+    --success: #4ade80;
+    --success-bg: #052e16;
+    --warning: #fbbf24;
+    --warning-bg: #2a1c04;
+    --danger: #f87171;
+    --danger-bg: #2a0a0a;
+    --code-bg: #05070c;
+    --code-fg: #e2e8f0;
+    --ring: #818cf8;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-code-bg: var(--code-bg);
+  --color-code-fg: var(--code-fg);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--muted) 25%, var(--border) 37%, var(--muted) 63%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+/* SQL syntax highlighting */
+.sql-kw { color: #c4b5fd; font-weight: 600; }
+.sql-fn { color: #7dd3fc; }
+.sql-str { color: #86efac; }
+.sql-num { color: #fdba74; }
+.sql-com { color: #94a3b8; font-style: italic; }
