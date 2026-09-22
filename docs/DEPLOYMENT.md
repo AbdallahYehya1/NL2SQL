@@ -2,17 +2,16 @@
 
 ## Verification status (read this first)
 
-**Supabase is now verified against a real project** (below). **Vercel is still not verified** — no deployment was available. Everything
-Vercel-specific is documented with exact steps to check on first deploy.
+**Both Supabase and Vercel are now verified against a real project and a real deployment** (below).
 
 | Area | Status | Evidence |
 |------|--------|----------|
 | Migrations, seed, app on PostgreSQL 16 + pgvector (Docker) | ✅ verified | full test suite |
 | Same on PostgreSQL 17 | ✅ verified | full integration suite (all tests) run against `pgvector/pgvector:pg17` |
 | Non-superuser owner role, pgvector, dedicated read-only login, dataset role/grants/RLS (local simulation) | ✅ verified | `tests/integration/managed-postgres-permissions.test.ts` |
-| **A real Supabase project** (eu-west-1, PostgreSQL 17.6): migrations, seed, roles, RLS, dataset upload, isolation, cleanup | ✅ **verified 2026-09-22** | this section, below |
+| **A real Supabase project** (eu-west-1, PostgreSQL 17.6): migrations, seed, roles, RLS, dataset upload, isolation, cleanup | ✅ **verified 2026-09-22** | [below](#real-supabase-verification-2026-09-22) |
 | `next build` / `next start`, Node runtime, no filesystem / worker / Docker at run time | ✅ verified locally | production build; source scan (no `fs`, `child_process`, `worker_threads`) |
-| **Vercel**: function bundling (WASM), `maxDuration`, cold starts, body-size limits, env vars | ❌ **not verified** | steps below |
+| **A real Vercel deployment**, live at the Supabase project above, Groq as the LLM provider | ✅ **verified 2026-09-22** | [below](#real-vercel-verification-2026-09-22) |
 | Real embedding model + pgvector retrieval quality | ❌ **not evaluated** | no embedding provider available (see [EVALUATION.md](EVALUATION.md)) |
 
 **Migration bug found by the local simulation (fixed, then confirmed fixed on the real project below).** Migration 2 used a session-level
@@ -40,17 +39,44 @@ project's own schemas/roles/data was touched; every test artifact created during
 | Dataset deletion | ✅ role and schema fully removed; a tombstone row (`status = 'deleted'`) remains in `nl2sql.datasets`, by design |
 | Malicious upload (`DROP TABLE nl2sql.query_runs; GRANT ALL …`) | ✅ rejected with *"This SQL file contains unsupported statements."*, line numbers included, zero schemas created, `nl2sql.query_runs` untouched |
 
-**Not yet verified for real:** an actual Vercel deployment (below), and the `GET /api/health` / dashboard UI flow end-to-end (verified at the
-code-path level via `validateSql`/`executeQuery`/`importDataset` directly, not via a running HTTP server against this project).
+At this point in verification, the HTTP/Vercel layer was still unconfirmed; that gap is closed below.
 
-### First-deploy verification checklist (Vercel)
+### Real Vercel verification (2026-09-22)
 
-Supabase is done (above). These remaining steps need an actual Vercel deployment:
+Deployed from this local directory with the Vercel CLI (`vercel deploy --prod`, no GitHub integration needed), to the user's
+pre-existing Vercel project, using the real Supabase project above (transaction pooler, port `6543`) and **Groq** (`AI_PROVIDER=groq`,
+`AI_MODEL=openai/gpt-oss-120b`, free tier) as the LLM provider. Live at **https://nl-2-sql-seven.vercel.app**.
 
-1. Deploy to Vercel with the variables in §3 below. `GET /api/health` → `ok: true`.
-2. Ask "Top 5 products by revenue" (demo) → answered.
-3. Upload a tiny CSV, ask a question about it, through the real HTTP API (not just the code path already verified against Supabase directly).
-4. Check the function log of `/api/query`: no 500 on the first cold start. If one appears, `libpg-query.wasm` is missing from the traced files: add it to `outputFileTracingIncludes` in `next.config.ts`.
+| Check | Result |
+|-------|--------|
+| `vercel link` / `vercel deploy --prod` from a personal-account access token | ✅ works once the token is a genuine account-scoped token (see the note below on token pitfalls) |
+| **Project had no Framework Preset configured** (`framework: null` — it had been created empty in the dashboard, never auto-detected) | ⚠️ **first deploy failed**: `The Output Directory "public" is empty` (Vercel fell back to static-site output detection). Fixed with one API call: `PATCH /v9/projects/{id} {"framework":"nextjs"}` (or set it in the dashboard: *Project Settings → General → Framework Preset → Next.js*). **New checklist item, not previously documented** |
+| Build on Vercel (`npm run build` inside the Vercel builder) | ✅ compiled successfully, all routes built (static `/`, `/datasets`, `/datasets/new`; dynamic `/api/*`, `/datasets/[id]`) |
+| `libpg-query.wasm` in the deployed function | ✅ no manual `outputFileTracingIncludes` change was needed — confirmed by the SQL-parsing routes below actually working |
+| `GET /api/health` | ✅ `{"ok":true,"ai":{"provider":"groq","model":"openai/gpt-oss-120b","configured":true},"database":{"configured":true,"reachable":true},"retrieval":"lexical"}` |
+| Real question through the live HTTP API ("How many customers are there?") | ✅ correct SQL and answer (1,800), **2.9 s total** — first-question cold start included |
+| CSV dataset upload through the live HTTP API (not just the code path) | ✅ streamed NDJSON progress, `status: ready`, 1 table / 3 rows |
+| Question against that uploaded dataset, live | ✅ `SELECT ROUND(AVG(v.score)::numeric, 2) …` → 85.33, matches the input data exactly |
+| Cleanup | ✅ dataset deleted through the live API; schema and role confirmed gone on Supabase afterward |
+| Cold start | one request timed out client-side at 30 s before the app had ever been hit; every request after that answered in 2–3 s. Expect a slow first request after idle periods |
+
+**Token pitfall (new finding).** The first two access tokens tried both failed with `"User not found"` on `whoami`/`/v2/user` even though
+they were "real" tokens copy-pasted correctly — one turned out to be stale/invalid, and one was created against a specific pre-existing
+project rather than as a plain account token. A token that fails `/v2/user` but succeeds on `/v2/teams` (a different error, `forbidden`
+rather than `not_found`) is a sign worth chasing rather than assuming any prefix/format is wrong; in this case `vercel link` still found
+and correctly linked the pre-existing project once a working token was in hand.
+
+### First-deploy checklist for a *new* Vercel + Supabase pair (start to finish)
+
+1. `npm run db:migrate` against the Supabase **session pooler** (not the direct-connection host — see above). `npm run db:seed`.
+2. `ALTER ROLE nl2sql_readonly LOGIN PASSWORD '…'`; set `READONLY_DATABASE_URL` with user `nl2sql_readonly.<project-ref>`.
+3. Create the Vercel project (`vercel link`) and set env vars for Production + Preview (`DATABASE_URL`/`READONLY_DATABASE_URL` on the
+   **transaction pooler**, port `6543`; `AI_PROVIDER`/`AI_MODEL`/`AI_API_KEY`; `RATE_LIMIT_SALT`).
+4. **Confirm the Framework Preset is `nextjs`** (`GET /v9/projects/{id}` → `framework`) before the first deploy — an empty/manually-created
+   project does not auto-detect this, and the first build will fail on output-directory detection otherwise.
+5. `vercel deploy --prod`. `GET /api/health` → `ok: true`.
+6. Ask a real question through `/api/query` → answered.
+7. Upload a tiny CSV through `/api/datasets/upload`, ask a question about it, delete it, confirm the schema/role are gone on Supabase.
 
 ## 1. Supabase
 
@@ -134,7 +160,11 @@ tight free-tier limits.
 
 ## 3. Vercel
 
-1. Push the repository to GitHub and **Import** it in Vercel (framework: Next.js — auto-detected; build `npm run build`).
+1. Push the repository to GitHub and **Import** it in Vercel (framework: Next.js). ⚠️ **Verify the Framework Preset is actually set to
+   "Next.js"** (*Project Settings → General*) — importing from GitHub normally auto-detects it, but a project created empty first (e.g.
+   from the CLI before any code exists) does not, and the first build then fails with `The Output Directory "public" is empty` (hit and
+   fixed during real verification, above). Alternatively deploy straight from a local clone with the Vercel CLI (`vercel link && vercel
+   deploy --prod`) — no GitHub connection required.
 2. **Environment variables** (Production + Preview), all server-side:
 
    | Variable | Required | Value |
@@ -148,9 +178,11 @@ tight free-tier limits.
 
    Do **not** add `NEXT_PUBLIC_` prefixes; nothing is meant for the browser.
 3. **Deploy.** The query route sets `maxDuration = 60`. ⚠️ On the Hobby plan check your plan's function-duration limit;
-   slow free models can approach it. Region: pick the Vercel region nearest your Supabase project to keep DB round-trips short.
+   slow free models can approach it — **Groq's free tier did not** (a full question, including a cold start, took under 3 s in real
+   verification). Region: pick the Vercel region nearest your Supabase project to keep DB round-trips short.
 4. **Verify**: open `/api/health` → `{"ok": true, …}` (database reachable, AI configured). Then ask “Top 5 products by
-   revenue”. If the setup banner shows on the home page, follow its message.
+   revenue”. If the setup banner shows on the home page, follow its message. The very first request after a cold start can take
+   30 s+; a request while the function is warm is fast.
 5. **Runtime notes**: Node.js runtime (not Edge) because of `pg` and the WASM SQL parser; `serverExternalPackages` keeps
    `pg` and `libpg-query` out of the bundle; no filesystem access at runtime; no long-lived state (rate limits and history
    are in Postgres); pools are `max: 3` per instance. The build's file traces for `/api/query`, `/api/datasets/upload` and

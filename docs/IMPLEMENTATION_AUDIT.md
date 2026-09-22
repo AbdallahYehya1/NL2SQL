@@ -63,7 +63,8 @@ Import allow-list (89 of 111 extra hostile statements rejected, the other 22 are
 
 ## Not verifiable here
 
-A real Vercel deployment, a real embedding model. See [DEPLOYMENT.md](DEPLOYMENT.md) and [EVALUATION.md](EVALUATION.md).
+A real embedding model — no embedding provider was available. See [EVALUATION.md](EVALUATION.md). (A real Vercel deployment *was*
+subsequently verified — see below.)
 
 ---
 
@@ -76,4 +77,22 @@ transaction-mode pooler (the connection the deployed app actually uses) both wor
 upload exercised `CREATE ROLE`/grants/RLS on the managed platform successfully, a malicious upload was rejected with no residue, and every test
 artifact was deleted and confirmed gone afterward. New finding: the plain direct-connection host (`db.<ref>.supabase.co:5432`) is IPv6-only and
 unreachable from an IPv4-only network — the session pooler must be used instead for anything run from a normal laptop/CI runner; this is now
-called out in DEPLOYMENT.md. Vercel remains unverified.
+called out in DEPLOYMENT.md. (Vercel was unverified at the time this section was written; see the entry below.)
+
+---
+
+# Real Vercel verification (2026-09-22)
+
+Deployed from this local directory (Vercel CLI, no GitHub integration needed) to a real Vercel project, backed by the Supabase project
+above and Groq (`openai/gpt-oss-120b`, free tier) as the LLM. Live at https://nl-2-sql-seven.vercel.app. Full detail in
+[DEPLOYMENT.md](DEPLOYMENT.md#real-vercel-verification-2026-09-22); summary:
+
+- **New deployment bug found and fixed**: the pre-existing Vercel project had no Framework Preset configured (`framework: null`), so the
+  first build failed with `The Output Directory "public" is empty` — Vercel fell back to static-site detection instead of the Next.js
+  builder. Fixed with `PATCH /v9/projects/{id} {"framework":"nextjs"}`. This is a real, previously-undocumented deployment gotcha, now
+  captured in the deployment checklist.
+- `GET /api/health` → `ok: true`. A real question through the live HTTP API answered correctly in 2.9 s (cold start included).
+- A CSV dataset was uploaded through the live HTTP API (not just the code path against Supabase directly), queried correctly, deleted, and
+  confirmed gone on Supabase afterward — closing the one item the Supabase-only verification pass had left open.
+- Groq's free tier (`AI_PROVIDER=groq`) replaces the ~90 s/question free endpoint used for evaluation; it comfortably fits inside Vercel's
+  60 s function limit.

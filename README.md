@@ -157,17 +157,18 @@ There are **no `NEXT_PUBLIC_*` variables**: nothing secret ever reaches the brow
 
 ## Deployment
 
-The target is **Vercel + Supabase**. Be clear about what is and is not verified:
+The target is **Vercel + Supabase** — and both are now live: [nl-2-sql-seven.vercel.app](https://nl-2-sql-seven.vercel.app), backed by the
+real Supabase project below and Groq as the LLM.
 
 | | Status |
 |---|---|
 | PostgreSQL 16 and 17 with pgvector; production build; no filesystem / worker / Docker needed at run time | ✅ tested |
 | Non-superuser `CREATEROLE` owner, pgvector, dedicated read-only login (a *local simulation* of Supabase's permission model) | ✅ tested — and it found a real migration bug, now fixed |
 | **A real Supabase project** (eu-west-1): migrations, seed, session + transaction poolers, roles/grants/RLS, dataset upload/isolation/cleanup | ✅ **verified 2026-09-22** — [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#real-supabase-verification-2026-09-22) |
-| A real **Vercel** deployment (WASM bundling, `maxDuration`, cold starts) | ❌ **not verified** — checklist in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#first-deploy-verification-checklist-vercel) |
+| **A real Vercel deployment**: health check, a real question, a real dataset upload — all through the live HTTP API | ✅ **verified 2026-09-22** — [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#real-vercel-verification-2026-09-22) |
 
 A GitHub Actions workflow runs lint, typecheck, unit and integration tests (PostgreSQL 16 and 17) and the production build. Vercel notes: the free public LLM endpoint used for the evaluation is far too slow
-for a 60 s function (≈ 90 s per question); a full question against the real Supabase project above took **7.1 s** end to end (3 LLM calls) with `AI_PROVIDER=groq AI_MODEL=openai/gpt-oss-120b` (also free-tier), which is the one actually intended for deployment.
+for a 60 s function (≈ 90 s per question); the deployed app uses `AI_PROVIDER=groq AI_MODEL=openai/gpt-oss-120b` (also free-tier) instead, and a real question through the live deployment took **2.9 s** end to end.
 
 ## Limitations
 
@@ -176,7 +177,7 @@ for a 60 s function (≈ 90 s per question); a full question against the real Su
 * **Answer quality on uploaded schemas depends on their names, comments and constraints.** Uploads have no curated business metrics; colloquial wording that does not match a column name is where the held-out benchmark shows the most misses.
 * **Model-dependent.** Results come from one free, third-party model; latency is dominated by it. The safety layers hold regardless of model quality.
 * **Vector retrieval is off by default and was not evaluated** (no embedding model was available). The retrieval numbers are lexical-only; the pgvector path is tested for plumbing with a deterministic hashing embedder, not for semantic quality.
-* **Vercel is not verified** (above); Supabase now is.
+* **Deployed on the free tiers of everything** (Supabase, Vercel Hobby, Groq): fine for a demo/portfolio, not sized for real traffic — no autoscaling headroom has been tested, and rate limits (Groq's free tier: 30 req/min, 8K tokens/min) will bite under concurrent use.
 * Single-turn Q&A: no conversation memory. The column-existence check is conservative for complex multi-table scopes; the database is the final judge.
 
 ## Docs
