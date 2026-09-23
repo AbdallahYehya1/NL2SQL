@@ -23,12 +23,18 @@ export function ResultTable({ columns, rows, truncated }: { columns: string[]; r
     URL.revokeObjectURL(url);
   }
 
+  if (!Array.isArray(columns) || columns.length === 0 || !Array.isArray(rows) || rows.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border py-10 text-center text-sm text-muted-foreground">No matching records were found.</div>
+    );
+  }
+
   return (
     <div>
       <div className="max-h-[420px] overflow-auto rounded-lg border border-border">
         <table className="w-full min-w-max border-collapse text-sm">
           <caption className="sr-only">Query results</caption>
-          <thead className="sticky top-0 bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
+          <thead className="sticky top-0 z-10 bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               {columns.map((c) => (
                 <th key={c} scope="col" className="whitespace-nowrap px-3 py-2 font-medium">
@@ -39,11 +45,11 @@ export function ResultTable({ columns, rows, truncated }: { columns: string[]; r
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={i} className="border-t border-border odd:bg-transparent even:bg-muted/40">
+              <tr key={i} className="border-t border-border odd:bg-transparent even:bg-muted/40 hover:bg-accent/60">
                 {columns.map((c) => {
-                  const v = row[c];
+                  const v = row?.[c];
                   return (
-                    <td key={c} className={`whitespace-nowrap px-3 py-2 ${typeof v === "number" ? "text-right tabular-nums" : ""}`}>
+                    <td key={c} className={`max-w-[320px] truncate px-3 py-2 ${typeof v === "number" ? "text-right tabular-nums" : ""}`} title={typeof v === "string" && v.length > 40 ? v : undefined}>
                       {formatCell(v)}
                     </td>
                   );
