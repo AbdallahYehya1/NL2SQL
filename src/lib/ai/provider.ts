@@ -1,5 +1,6 @@
 import type { ZodType } from "zod";
 import { getConfig, type AppConfig } from "@/lib/config";
+import type { RateLimitInfo } from "@/lib/types";
 
 /**
  * Provider abstraction. The pipeline only ever talks to `AIProvider`; the concrete implementation speaks the
@@ -19,9 +20,94 @@ export class ProviderError extends Error {
     readonly code: ProviderErrorCode,
     message: string,
     readonly status?: number,
+    /** Only set for PROVIDER_RATE_LIMIT, and only with values actually read from the response. */
+    readonly rateLimit?: RateLimitInfo,
   ) {
     super(message);
     this.name = "ProviderError";
+  }
+}
+
+/**
+ * Parses a duration string of the kind Groq's `x-ratelimit-reset-*` headers use ("38m52.8s", "577ms", "2h").
+ * Returns seconds, or undefined if nothing recognisable was found — never a guessed number.
+ */
+export function parseRateLimitDuration(s: string): number | undefined {
+  const re = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
+  let total = 0;
+  let matched = false;
+  for (const m of s.matchAll(re)) {
+    matched = true;
+    const value = Number(m[1]);
+    const unit = m[2];
+    const secondsPerUnit = unit === "ms" ? 0.001 : unit === "s" ? 1 : unit === "m" ? 60 : unit === "h" ? 3600 : 86400;
+    total += value * secondsPerUnit;
+  }
+  return matched ? total : undefined;
+}
+
+const num = (v: string | null): number | undefined => (v !== null && Number.isFinite(Number(v)) ? Number(v) : undefined);
+
+/**
+ * Reads the real rate-limit headers off a 429 response. Every field is either a value the provider actually sent
+ * or left undefined — this function never invents a number or a reset time.
+ *
+ * `limitType` is classified, not guessed: WHICH resource is constrained (requests vs. tokens) comes directly from
+ * which remaining-* header is at/near zero; whether it reads as a "minute" or "day" style window comes from the
+ * real reset duration's own magnitude (under an hour vs. not) — a label on a real number, never a fabricated one.
+ */
+export function parseRateLimitHeaders(headers: Headers, nowMs: number): RateLimitInfo {
+  const retryAfterRaw = headers.get("retry-after");
+  const remainingRequests = num(headers.get("x-ratelimit-remaining-requests"));
+  const remainingTokens = num(headers.get("x-ratelimit-remaining-tokens"));
+  const resetRequestsSec = (() => {
+    const raw = headers.get("x-ratelimit-reset-requests");
+    return raw ? parseRateLimitDuration(raw) : undefined;
+  })();
+  const resetTokensSec = (() => {
+    const raw = headers.get("x-ratelimit-reset-tokens");
+    return raw ? parseRateLimitDuration(raw) : undefined;
+  })();
+
+  const tokensExhausted = remainingTokens !== undefined && remainingTokens <= 0;
+  const requestsExhausted = remainingRequests !== undefined && remainingRequests <= 0;
+  let resource: "requests" | "tokens" | undefined;
+  if (tokensExhausted && !requestsExhausted) resource = "tokens";
+  else if (requestsExhausted && !tokensExhausted) resource = "requests";
+  else if (tokensExhausted && requestsExhausted) resource = (resetTokensSec ?? Infinity) <= (resetRequestsSec ?? Infinity) ? "tokens" : "requests";
+
+  const relevantResetSec = resource === "tokens" ? resetTokensSec : resource === "requests" ? resetRequestsSec : undefined;
+  const window = relevantResetSec === undefined ? undefined : relevantResetSec < 3600 ? "MINUTE" : "DAY";
+  const limitType: RateLimitInfo["limitType"] =
+    resource === "requests" && window ? (window === "MINUTE" ? "REQUESTS_PER_MINUTE" : "REQUESTS_PER_DAY")
+      : resource === "tokens" && window ? (window === "MINUTE" ? "TOKENS_PER_MINUTE" : "TOKENS_PER_DAY")
+        : "UNKNOWN";
+
+  let retryAfterSeconds: number | undefined;
+  if (retryAfterRaw !== null) {
+    const asSeconds = Number(retryAfterRaw);
+    if (Number.isFinite(asSeconds)) retryAfterSeconds = asSeconds;
+    else {
+      const asDateMs = Date.parse(retryAfterRaw);
+      if (Number.isFinite(asDateMs)) retryAfterSeconds = Math.max(0, Math.round((asDateMs - nowMs) / 1000));
+    }
+  }
+  if (retryAfterSeconds === undefined) retryAfterSeconds = relevantResetSec ?? resetRequestsSec ?? resetTokensSec;
+
+  const resetAt = retryAfterSeconds !== undefined ? new Date(nowMs + retryAfterSeconds * 1000).toISOString() : undefined;
+  return { limitType, retryAfterSeconds, resetAt };
+}
+
+function rateLimitMessage(info: RateLimitInfo): string {
+  switch (info.limitType) {
+    case "REQUESTS_PER_MINUTE":
+    case "TOKENS_PER_MINUTE":
+      return "The AI provider's short-term usage limit was reached. Please wait a bit and try again.";
+    case "REQUESTS_PER_DAY":
+    case "TOKENS_PER_DAY":
+      return "The AI provider's daily usage limit was reached. Please try again later.";
+    default:
+      return "The AI provider rate limit was reached. Please try again shortly.";
   }
 }
 
@@ -168,12 +254,12 @@ export class OpenAICompatibleProvider implements AIProvider {
             const errObj = typeof json.error === "object" ? json.error : undefined;
             const msg = String(errObj?.message ?? json.error);
             const code = Number(errObj?.code);
-            throw this.httpError(Number.isFinite(code) ? code : 502, msg);
+            throw this.httpError(Number.isFinite(code) ? code : 502, msg, res.headers);
           }
           return { json, status: res.status };
         }
         const errObj = typeof json?.error === "object" ? json.error : undefined;
-        throw this.httpError(res.status, String(errObj?.message ?? (typeof json?.error === "string" ? json.error : undefined) ?? json?.message ?? json?.raw ?? res.statusText));
+        throw this.httpError(res.status, String(errObj?.message ?? (typeof json?.error === "string" ? json.error : undefined) ?? json?.message ?? json?.raw ?? res.statusText), res.headers);
       } catch (err) {
         if (err instanceof ProviderError) lastErr = err;
         else if ((err as Error).name === "AbortError") lastErr = new ProviderError("PROVIDER_UNAVAILABLE", `The AI provider did not respond within ${Math.round(timeoutMs / 1000)}s.`);
@@ -191,10 +277,13 @@ export class OpenAICompatibleProvider implements AIProvider {
     throw lastErr ?? new ProviderError("PROVIDER_UNAVAILABLE", "AI provider request failed.");
   }
 
-  private httpError(status: number, message: string): ProviderError {
+  private httpError(status: number, message: string, headers?: Headers): ProviderError {
     const short = message.slice(0, 240);
     if (status === 401 || status === 403) return new ProviderError("PROVIDER_AUTH", `The AI provider rejected the API key (${status}). Check AI_API_KEY.`, status);
-    if (status === 429) return new ProviderError("PROVIDER_RATE_LIMIT", "The AI provider rate limit was reached. Wait a moment and try again.", status);
+    if (status === 429) {
+      const rateLimit = parseRateLimitHeaders(headers ?? new Headers(), Date.now());
+      return new ProviderError("PROVIDER_RATE_LIMIT", rateLimitMessage(rateLimit), status, rateLimit);
+    }
     if (status === 404 || /model.*(not found|unavailable|does not exist)|no endpoints/i.test(short)) {
       return new ProviderError("PROVIDER_UNAVAILABLE", `The configured model is not available from the provider (${short}). Check AI_MODEL.`, status);
     }
