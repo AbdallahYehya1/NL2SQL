@@ -1,11 +1,11 @@
 "use client";
 
-import { ArrowLeft, Check, KeyRound, Link2, Loader2, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, BarChart3, Check, KeyRound, Link2, Loader2, Sparkles, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PrivacyNotice } from "./privacy-notice";
@@ -140,6 +140,11 @@ export function DatasetDetails({ id }: { id: string }) {
                   <Button onClick={useDataset} disabled={busy !== null}>
                     {busy === "use" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Check className="h-4 w-4" aria-hidden />} Use This Dataset
                   </Button>
+                )}
+                {d.status === "ready" && (
+                  <Link href={`/datasets/${id}/dashboard`} className={buttonVariants({ variant: "outline" })}>
+                    <BarChart3 className="h-4 w-4" aria-hidden /> View Dashboard
+                  </Link>
                 )}
                 {!d.isBuiltin &&
                   (confirmDelete ? (

@@ -227,6 +227,9 @@ export function Dashboard() {
             <Link href={`/datasets/${datasetId}`} className="text-xs text-primary underline-offset-2 hover:underline">
               view schema
             </Link>
+            <Link href={`/datasets/${datasetId}/dashboard`} className="text-xs text-primary underline-offset-2 hover:underline">
+              dashboard
+            </Link>
           </p>
           <QueryInput
             value={question}
