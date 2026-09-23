@@ -3,7 +3,7 @@ import { executeQuery } from "@/lib/database/executor";
 import type { DatasetContext } from "@/lib/datasets/context";
 import type { ColumnMeta, TableMeta } from "@/lib/types";
 import { isRealCategory, rankTables, type TableColumnProfile } from "./column-classify";
-import { buildAllTableRowCountsSql, buildCategoryBreakdownSql, buildTableAggregateSql, buildTimeSeriesSql, buildYearBreakdownSql } from "./sql-builder";
+import { buildAllTableRowCountsSql, buildCategoryBreakdownSql, buildScatterSampleSql, buildTableAggregateSql, buildTimeSeriesSql, buildYearBreakdownSql } from "./sql-builder";
 import { runDashboardQuery, type QueryExecutor } from "./query-runner";
 
 /**
@@ -37,13 +37,27 @@ export interface TimeSeriesResult {
   sourceTable: TableMeta;
 }
 
+export interface ScatterResult {
+  colA: ColumnMeta;
+  colB: ColumnMeta;
+  sourceTable: TableMeta;
+  rows: { x: number; y: number }[];
+}
+
 export interface DashboardAnalysis {
   allTables: TableMeta[];
   ranked: TableColumnProfile[];
   primary?: TableAggregateResult;
   supporting: TableAggregateResult[];
+  /** The primary table's best category breakdown — a ranking (e.g. "revenue by category"). */
   categoryBreakdown?: BreakdownResult;
+  /** A second, different categorical dimension on the primary table, when one exists — for chart diversity, not a near-duplicate of categoryBreakdown. */
+  secondaryCategoryBreakdown?: BreakdownResult;
+  /** A category breakdown from a supporting table (e.g. "payment method distribution") — broadens the story beyond the single primary table. */
+  supportingBreakdown?: BreakdownResult;
   timeSeries?: TimeSeriesResult;
+  /** Two independent measures on the primary table, sampled for a scatter — only when the table genuinely has 2+ real measures. */
+  scatter?: ScatterResult;
   warnings: string[];
 }
 
@@ -88,24 +102,27 @@ async function aggregateTable(table: TableMeta, profile: TableColumnProfile, dat
   return out;
 }
 
-/** Best measure to pair with a breakdown/time-series query: the richest measure candidate (highest non-null coverage), or none. */
-function bestMeasure(agg: TableAggregateResult): ColumnMeta | undefined {
-  const candidates = agg.profile.measures.filter((c) => agg.measures[c.name]?.sum !== undefined);
-  if (candidates.length === 0) return undefined;
-  return candidates.reduce((best, c) => ((agg.measures[c.name].nulls ?? Infinity) < (agg.measures[best.name].nulls ?? Infinity) ? c : best), candidates[0]);
+/** Measure candidates ranked by richest non-null coverage first — the head is "the" measure, the rest are alternates (e.g. for a scatter). */
+function rankMeasures(agg: TableAggregateResult): ColumnMeta[] {
+  return agg.profile.measures.filter((c) => agg.measures[c.name]?.sum !== undefined).sort((a, b) => (agg.measures[a.name].nulls ?? Infinity) - (agg.measures[b.name].nulls ?? Infinity));
 }
 
-/** Best categorical column to group by: prefers one with a moderate, already-known distinct count (a real category, not near-unique). */
-function bestCategorical(agg: TableAggregateResult): ColumnMeta | undefined {
-  const candidates = agg.profile.categoricalCandidates.filter((c) => isRealCategory(agg.categoricals[c.name]?.distinct, agg.rowCount));
-  if (candidates.length === 0) return undefined;
-  // prefer fewer distinct values (a cleaner chart) but at least 2
-  return candidates.reduce((best, c) => ((agg.categoricals[c.name].distinct ?? Infinity) < (agg.categoricals[best.name].distinct ?? Infinity) ? c : best), candidates[0]);
+/** Best measure to pair with a breakdown/time-series query: the richest measure candidate (highest non-null coverage), or none. */
+function bestMeasure(agg: TableAggregateResult): ColumnMeta | undefined {
+  return rankMeasures(agg)[0];
+}
+
+/** Real-category columns ranked by distinct count ascending (fewer categories = a cleaner chart) — the head is "the" category, the rest are alternates for a second, different chart. */
+function rankCategoricals(agg: TableAggregateResult): ColumnMeta[] {
+  return agg.profile.categoricalCandidates
+    .filter((c) => isRealCategory(agg.categoricals[c.name]?.distinct, agg.rowCount))
+    .sort((a, b) => (agg.categoricals[a.name].distinct ?? Infinity) - (agg.categoricals[b.name].distinct ?? Infinity));
 }
 
 const MAX_SUPPORTING_TABLES = 3;
 const BREAKDOWN_LIMIT = 12;
 const TIME_SERIES_LIMIT = 60;
+const SCATTER_SAMPLE_LIMIT = 300;
 
 // The validator caps a single statement at LIMITS.maxTables (15) FROM clauses; a UNION-ALL branch per table counts
 // as one each, so a wide schema (like the 20-table demo) must be split into chunks rather than sent as one query.
@@ -157,7 +174,10 @@ export async function analyzeDataset(dataset: DatasetContext, config: AppConfig,
   }
 
   let categoryBreakdown: BreakdownResult | undefined;
+  let secondaryCategoryBreakdown: BreakdownResult | undefined;
+  let supportingBreakdown: BreakdownResult | undefined;
   let timeSeries: TimeSeriesResult | undefined;
+  let scatter: ScatterResult | undefined;
 
   if (primary) {
     const measureCol = bestMeasure(primary);
@@ -178,15 +198,50 @@ export async function analyzeDataset(dataset: DatasetContext, config: AppConfig,
       }
     }
 
-    const categoryCol = bestCategorical(primary);
-    if (categoryCol) {
-      const sql = buildCategoryBreakdownSql(primary.table, categoryCol, measureCol, BREAKDOWN_LIMIT);
+    const categoricals = rankCategoricals(primary);
+    if (categoricals[0]) {
+      const sql = buildCategoryBreakdownSql(primary.table, categoricals[0], measureCol, BREAKDOWN_LIMIT);
       const res = await runDashboardQuery(sql, dataset, config, execute);
       if (res) {
-        categoryBreakdown = { categoryCol, measureCol, sourceTable: primary.table, rows: res.rows.map((r) => ({ category: r.category, value: num(r.value) ?? 0, n: num(r.n) ?? 0 })) };
+        categoryBreakdown = { categoryCol: categoricals[0], measureCol, sourceTable: primary.table, rows: res.rows.map((r) => ({ category: r.category, value: num(r.value) ?? 0, n: num(r.n) ?? 0 })) };
       } else warnings.push(`Could not compute a category breakdown for "${primary.table.name}".`);
+    }
+    // A second, genuinely different dimension on the same table (e.g. "revenue by category" AND "orders by status") — chart
+    // diversity per the master prompt, not "revenue by category" repeated with a different color.
+    if (categoricals[1]) {
+      const sql = buildCategoryBreakdownSql(primary.table, categoricals[1], measureCol, BREAKDOWN_LIMIT);
+      const res = await runDashboardQuery(sql, dataset, config, execute);
+      if (res) {
+        secondaryCategoryBreakdown = { categoryCol: categoricals[1], measureCol, sourceTable: primary.table, rows: res.rows.map((r) => ({ category: r.category, value: num(r.value) ?? 0, n: num(r.n) ?? 0 })) };
+      }
+    }
+
+    // Two independent measures on the same table → a relationship view (scatter), a structurally different chart from
+    // any ranking/trend above.
+    const measures = rankMeasures(primary);
+    if (measures.length >= 2) {
+      const sql = buildScatterSampleSql(primary.table, measures[0], measures[1], SCATTER_SAMPLE_LIMIT);
+      const res = await runDashboardQuery(sql, dataset, config, execute);
+      if (res) {
+        const rows = res.rows.map((r) => ({ x: num(r.x), y: num(r.y) })).filter((r): r is { x: number; y: number } => r.x !== undefined && r.y !== undefined);
+        if (rows.length >= 5) scatter = { colA: measures[0], colB: measures[1], sourceTable: primary.table, rows };
+      }
     }
   }
 
-  return { allTables, ranked, primary, supporting, categoryBreakdown, timeSeries, warnings };
+  // One category breakdown from a supporting table too (e.g. "payment method distribution" when the primary table's
+  // own dimensions are already used above) — broadens the story beyond a single table without an unbounded query count.
+  for (const agg of supporting) {
+    const cats = rankCategoricals(agg);
+    if (!cats[0]) continue;
+    const measureCol = bestMeasure(agg);
+    const sql = buildCategoryBreakdownSql(agg.table, cats[0], measureCol, BREAKDOWN_LIMIT);
+    const res = await runDashboardQuery(sql, dataset, config, execute);
+    if (res && res.rows.length >= 2) {
+      supportingBreakdown = { categoryCol: cats[0], measureCol, sourceTable: agg.table, rows: res.rows.map((r) => ({ category: r.category, value: num(r.value) ?? 0, n: num(r.n) ?? 0 })) };
+      break;
+    }
+  }
+
+  return { allTables, ranked, primary, supporting, categoryBreakdown, secondaryCategoryBreakdown, supportingBreakdown, timeSeries, scatter, warnings };
 }

@@ -73,6 +73,16 @@ export function buildTimeSeriesSql(table: TableMeta, dateCol: ColumnMeta, measur
 }
 
 /**
+ * A bounded sample of two numeric columns for a scatter plot. Uses a plain LIMIT (no ORDER BY random()) — real,
+ * unfabricated values, just not a uniformly-random sample — because sorting the whole table randomly would be a
+ * full table scan on every dashboard load, which the performance requirement explicitly rules out.
+ */
+export function buildScatterSampleSql(table: TableMeta, colA: ColumnMeta, colB: ColumnMeta, limit: number): string {
+  const a = q(colA.name), b = q(colB.name);
+  return `SELECT ${a} AS ${q("x")}, ${b} AS ${q("y")} FROM ${q(table.name)} WHERE ${a} IS NOT NULL AND ${b} IS NOT NULL LIMIT ${limit}`;
+}
+
+/**
  * Real row count for EVERY table in one round trip (one UNION ALL query) — used because the registry's own
  * `TableMeta.rowCount` is reliably populated for uploaded datasets (captured at import time) but NOT for the
  * built-in demo (a static, curated registry that was never introspected), which would otherwise make table

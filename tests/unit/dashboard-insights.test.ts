@@ -85,8 +85,26 @@ describe("insight engine — comparison / concentration / distribution", () => {
     const comparison = buildInsights(analysis).find((i) => i.type === "COMPARISON");
     expect(comparison?.category).toBe("Electronics");
     expect(comparison?.changePercent).toBeCloseTo(18, 0);
-    expect(comparison?.statement).toContain("Electronics");
-    expect(comparison?.statement).toContain("18%");
+  });
+
+  it("never reports an extreme SUM-driven percentage as a 'comparison' (regression: a 7,119% claim from a volume artifact)", () => {
+    // "delivered" has vastly more shipments than "in_transit" — a real value found via live testing — so their raw
+    // SUM(shipping_cost) totals differ by orders of magnitude even though nothing about the actual cost is unusual.
+    const analysis: DashboardAnalysis = {
+      ...base,
+      categoryBreakdown: {
+        categoryCol: ORDERS_TABLE.columns[4],
+        measureCol: ORDERS_TABLE.columns[3],
+        sourceTable: ORDERS_TABLE,
+        rows: [
+          { category: "delivered", value: 72_000, n: 10_000 },
+          { category: "in_transit", value: 1000, n: 5 },
+        ],
+      },
+    };
+    const insights = buildInsights(analysis);
+    expect(insights.some((i) => i.type === "COMPARISON")).toBe(false);
+    expect(insights.some((i) => i.statement.match(/\d{4,}%/))).toBe(false); // no 4+ digit percentage in any statement
   });
 
   it("reports a concentration when the top 3 of many categories dominate the total", () => {
@@ -110,6 +128,23 @@ describe("insight engine — comparison / concentration / distribution", () => {
     const rows = [{ category: "A", value: 25, n: 1 }, { category: "B", value: 25, n: 1 }, { category: "C", value: 25, n: 1 }, { category: "D", value: 25, n: 1 }];
     const analysis: DashboardAnalysis = { ...base, categoryBreakdown: { categoryCol: ORDERS_TABLE.columns[4], measureCol: undefined, sourceTable: ORDERS_TABLE, rows } };
     expect(buildInsights(analysis).some((i) => ["COMPARISON", "CONCENTRATION", "DISTRIBUTION"].includes(i.type))).toBe(false);
+  });
+});
+
+describe("insight engine — multiple breakdowns produce distinct, complementary insights", () => {
+  it("draws separate insights from the primary, secondary, and supporting-table breakdowns rather than only the first", () => {
+    const analysis: DashboardAnalysis = {
+      ...emptyAnalysis([ORDERS_TABLE, CUSTOMERS_TABLE]),
+      primary: fakeAgg(ORDERS_TABLE, { rowCount: 180 }),
+      categoryBreakdown: { categoryCol: ORDERS_TABLE.columns[4], measureCol: ORDERS_TABLE.columns[3], sourceTable: ORDERS_TABLE, rows: [{ category: "Electronics", value: 500, n: 10 }, { category: "Accessories", value: 200, n: 8 }] },
+      secondaryCategoryBreakdown: { categoryCol: ORDERS_TABLE.columns[5], measureCol: undefined, sourceTable: ORDERS_TABLE, rows: [{ category: "shipped", value: 140, n: 140 }, { category: "cancelled", value: 40, n: 40 }] },
+      supportingBreakdown: { categoryCol: CUSTOMERS_TABLE.columns[2], measureCol: undefined, sourceTable: CUSTOMERS_TABLE, rows: [{ category: "Cairo", value: 50, n: 50 }, { category: "Paris", value: 10, n: 10 }] },
+    };
+    const insights = buildInsights(analysis);
+    const tables = new Set(insights.flatMap((i) => i.sourceTables));
+    expect(tables.has("customers")).toBe(true); // the supporting-table breakdown's insight must survive, not be crowded out
+    const statements = insights.map((i) => i.statement);
+    expect(new Set(statements).size).toBe(statements.length); // no two insights say the same thing
   });
 });
 

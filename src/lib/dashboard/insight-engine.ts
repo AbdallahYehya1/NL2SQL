@@ -120,9 +120,8 @@ function trend(analysis: DashboardAnalysis): InsightFact[] {
   ];
 }
 
-/** One insight from the category breakdown: prefers a concentration statement, falls back to a simple comparison. */
-function categoryInsight(analysis: DashboardAnalysis): InsightFact | undefined {
-  const cb = analysis.categoryBreakdown;
+/** One insight from a category breakdown: prefers a concentration statement, falls back to a comparison, then a plain distribution note. */
+function categoryInsight(cb: DashboardAnalysis["categoryBreakdown"]): InsightFact | undefined {
   if (!cb || cb.rows.length < 2) return undefined;
   const rows = cb.rows.filter((r) => Number.isFinite(r.value) && r.value >= 0);
   if (rows.length < 2) return undefined;
@@ -158,7 +157,11 @@ function categoryInsight(analysis: DashboardAnalysis): InsightFact | undefined {
     const second = sorted[1];
     if (second.value > 0) {
       const diffPercent = ((top.value - second.value) / second.value) * 100;
-      if (diffPercent >= 10) {
+      // An upper bound matters as much as the lower one: a SUM-based comparison between categories with very
+      // different row counts (e.g. 10,000 "delivered" shipments vs. 5 "in transit" ones) can produce a technically
+      // true but wildly misleading "7,000% more" claim that's really just a volume artifact, not a rate difference.
+      // Past this point the topN-share framing below (concentration/distribution) is the honest way to describe it.
+      if (diffPercent >= 10 && diffPercent <= 300) {
         return {
           id: nextId("comparison"),
           type: "COMPARISON",
@@ -219,8 +222,18 @@ const MAX_INSIGHTS = 5;
 
 export function buildInsights(analysis: DashboardAnalysis, quality?: DashboardQuality): InsightFact[] {
   const candidates: InsightFact[] = [...peakAndLow(analysis), ...trend(analysis)];
-  const cat = categoryInsight(analysis);
-  if (cat) candidates.push(cat);
+  // Each breakdown (the primary table's main dimension, a second dimension on it, and one from elsewhere in the
+  // schema) is a genuinely different fact, not a restatement — a lower priority is given to later ones only so the
+  // single strongest story leads, not to suppress real findings from the other dimensions.
+  const breakdowns: [DashboardAnalysis["categoryBreakdown"], number][] = [
+    [analysis.categoryBreakdown, 0],
+    [analysis.secondaryCategoryBreakdown, -8],
+    [analysis.supportingBreakdown, -4],
+  ];
+  for (const [cb, penalty] of breakdowns) {
+    const fact = categoryInsight(cb);
+    if (fact) candidates.push({ ...fact, priority: fact.priority + penalty });
+  }
   const q = qualityInsight(quality);
   if (q) candidates.push(q);
 

@@ -1,12 +1,13 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
-import Link from "next/link";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Notice } from "@/components/results/result-view";
+import { Button } from "@/components/ui/button";
 import type { DashboardData } from "@/lib/dashboard/types";
-import { AskThisData } from "./ask-this-data";
+import { AskTeaser } from "./ask-teaser";
 import { DashboardSkeleton } from "./dashboard-skeleton";
+import { DashboardTabBar, useDashboardTabs } from "./dashboard-tabs";
 import { DataQualityCard } from "./data-quality-card";
 import { DatasetHeader } from "./dataset-header";
 import { InsightList } from "./insight-list";
@@ -26,6 +27,7 @@ export function DataDashboard({ id }: { id: string }) {
   const [loading, setLoading] = useState(true);
   const [reloadToken, setReloadToken] = useState(0);
   const [prevReloadToken, setPrevReloadToken] = useState(reloadToken);
+  const [tab, setTab] = useDashboardTabs();
 
   // A retry (reloadToken change) resets to the loading state during render, not inside the effect below — the
   // effect itself must not call setState synchronously (see use-countdown.ts / processing-pipeline.tsx for the
@@ -66,10 +68,6 @@ export function DataDashboard({ id }: { id: string }) {
 
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 space-y-5 px-4 py-6 sm:px-6 lg:py-10">
-      <Link href={`/datasets/${id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" aria-hidden /> Dataset details
-      </Link>
-
       {loading ? (
         <DashboardSkeleton />
       ) : error || !data ? (
@@ -79,21 +77,54 @@ export function DataDashboard({ id }: { id: string }) {
         </Notice>
       ) : (
         <>
-          <DatasetHeader data={data} />
-          <KpiGrid kpis={data.kpis} />
-          <SummarySection data={data} onRetry={() => setReloadToken((n) => n + 1)} />
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <DatasetHeader data={data} />
+            <Button variant="outline" size="sm" onClick={() => setReloadToken((n) => n + 1)}>
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh
+            </Button>
+          </div>
           {data.warnings.length > 0 && (
             <Notice tone="warning" title="Some dashboard insights couldn't be generated">
               <p>Your dataset is still available and you can continue asking questions below.</p>
             </Notice>
           )}
-          <VisualizationSection visualizations={data.visualizations} />
-          <InsightList insights={data.insights} />
-          <div className="grid gap-4 lg:grid-cols-2">
-            <RelationshipGraph relationships={data.relationships} />
-            <DataQualityCard quality={data.quality} />
-          </div>
-          <AskThisData datasetId={data.datasetId} suggestedQuestions={data.suggestedQuestions} />
+
+          <DashboardTabBar active={tab} onChange={setTab} badges={{ insights: data.insights.length, analytics: data.visualizations.length }} />
+
+          {tab === "overview" && (
+            <div className="animate-result-in space-y-5">
+              <KpiGrid kpis={data.kpis} />
+              <SummarySection data={data} onRetry={() => setReloadToken((n) => n + 1)} />
+              {data.visualizations[0] && <VisualizationSection visualizations={data.visualizations.slice(0, 1)} />}
+              {data.insights.length > 0 && <InsightList insights={data.insights.slice(0, 2)} />}
+              <AskTeaser datasetId={data.datasetId} suggestedQuestions={data.suggestedQuestions} />
+            </div>
+          )}
+          {tab === "analytics" &&
+            (data.visualizations.length > 0 ? (
+              <div className="animate-result-in">
+                <VisualizationSection visualizations={data.visualizations} />
+              </div>
+            ) : (
+              <Notice tone="accent" title="Not enough data for a visualization">
+                This dataset does not yet have a combination of columns (a date, a category, or two numeric fields) that produces a meaningful chart. Try asking a question instead.
+              </Notice>
+            ))}
+          {tab === "insights" && (
+            <div className="animate-result-in">
+              {data.insights.length > 0 ? <InsightList insights={data.insights} /> : <Notice tone="accent" title="No standout findings yet">This dataset does not yet have a strong enough trend, comparison, or concentration to report — the KPIs above still reflect the real data.</Notice>}
+            </div>
+          )}
+          {tab === "quality" && (
+            <div className="animate-result-in">
+              <DataQualityCard quality={data.quality} />
+            </div>
+          )}
+          {tab === "relationships" && (
+            <div className="animate-result-in">
+              <RelationshipGraph relationships={data.relationships} />
+            </div>
+          )}
         </>
       )}
     </div>

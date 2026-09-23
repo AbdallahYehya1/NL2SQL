@@ -17,8 +17,8 @@ import type { QueryResponse } from "@/lib/types";
  * small self-contained component (rather than extracting a shared hook out of the main page) to avoid touching the
  * existing, already-shipped query flow for an unrelated feature.
  */
-export function AskThisData({ datasetId, suggestedQuestions }: { datasetId: string; suggestedQuestions: string[] }) {
-  const [question, setQuestion] = useState("");
+export function AskThisData({ datasetId, suggestedQuestions, initialQuestion }: { datasetId: string; suggestedQuestions: string[]; initialQuestion?: string }) {
+  const [question, setQuestion] = useState(initialQuestion ?? "");
   const [asked, setAsked] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<QueryResponse | null>(null);
