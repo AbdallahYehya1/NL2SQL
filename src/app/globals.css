@@ -99,8 +99,34 @@ body {
   animation: shimmer 1.4s ease-in-out infinite;
 }
 
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes result-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes step-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.animate-result-in { animation: result-in 300ms ease-out both; }
+.animate-step-in { animation: step-in 250ms ease-out both; }
+.animate-pulse-soft { animation: pulse-soft 1.6s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   .skeleton { animation: none; }
+  dialog.open\:animate-\[modal-in_180ms_ease-out\] { animation: none !important; }
+  .animate-result-in, .animate-step-in, .animate-pulse-soft { animation: none !important; }
 }
 
 /* SQL syntax highlighting */

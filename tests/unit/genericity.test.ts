@@ -24,6 +24,10 @@ const ALLOWED: Record<string, { words: string[] | "*"; why: string }> = {
   "config.ts": { words: ["nl2sql_readonly"], why: "DB_EXECUTION_ROLE default = the demo dataset's read-only role" },
   "datasets/import-service.ts": { words: ["nl2sql_readonly"], why: "grants each dataset role to the demo's read-only role so SET ROLE works" },
   "datasets/metadata-builder.ts": { words: ["stores"], why: "the English verb in a description template ('the table that stores those things') — not a table name" },
+  "format.ts": {
+    words: ["customers", "orders", "products", "reviews"],
+    why: "generic English nouns used to recognise a plain entity COUNT (e.g. total_customers) so the KPI display doesn't put a $ in front of it — applied to the last word of ANY numeric column name, for any dataset; not a reference to the demo's tables",
+  },
 };
 
 const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
