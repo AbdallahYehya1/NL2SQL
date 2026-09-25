@@ -310,6 +310,21 @@ describe("dangerous or broken uploads never leave anything behind", () => {
     expect(after).toBe(before);
   });
 
+  it("single-row INSERTs are merged for speed, load every row, and a failure inside a merged batch still names the exact original line", async () => {
+    const ok = Array.from({ length: 2500 }, (_, i) => `INSERT INTO t (id, label) VALUES (${i}, 'row ${i}');`).join("\n");
+    const good = await importDataset(sqlReq(`CREATE TABLE t (id int PRIMARY KEY, label text);\n${ok}\n`, "Merged loads"), deps(SESSION));
+    expect(good.rowCount).toBe(2500);
+    const count = await pool.query(`SELECT count(*)::int AS n, min(label) AS first, max(id) AS last FROM ${good.id}.t`);
+    expect(count.rows[0]).toMatchObject({ n: 2500, first: "row 0", last: 2499 });
+    await deleteDataset(pool, good.id);
+
+    // rows on lines 2..11; line 8 repeats id 3 (line 5) -> the reported line must be 8, not the merged batch's first line
+    const lines = ["CREATE TABLE t (id int PRIMARY KEY);", ...[0, 1, 2, 3, 4, 5, 3, 7, 8, 9].map((id) => `INSERT INTO t VALUES (${id});`)];
+    const err = await importDataset(sqlReq(lines.join("\n"), "Dupe line"), deps(SESSION)).catch((e) => e);
+    expect(err).toBeInstanceOf(ImportError);
+    expect(err.message).toMatch(/line 8\b/);
+  });
+
   it("rolls back completely when loading fails at run time (duplicate primary key)", async () => {
     const s0 = await schemasBefore();
     const r0 = await rolesBefore();

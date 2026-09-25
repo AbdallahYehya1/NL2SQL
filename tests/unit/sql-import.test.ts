@@ -376,3 +376,60 @@ describe("SQL upload — large dumps (one INSERT per row)", () => {
     expect(err.details.join(" ")).toMatch(/line 20003/); // 1 CREATE + 20,000 INSERTs + 1 CREATE + the DROP on line 20003
   }, 30_000);
 });
+
+describe("SQL upload — coalescing single-row INSERTs into multi-row INSERTs (load speed)", () => {
+  const plan = async (sql: string) => (await planSqlImport(sql, limits)).statements;
+  const create = "CREATE TABLE t (id integer PRIMARY KEY, label text);\nCREATE TABLE u (id integer);\n";
+
+  it("merges consecutive single-row inserts into one statement with the same rows in the same order, keeping the originals", async () => {
+    const st = await plan(create + [1, 2, 3, 4].map((i) => `INSERT INTO t (id, label) VALUES (${i}, 'row ${i}');`).join("\n"));
+    const { coalesceInserts } = await import("@/lib/datasets/sql-import");
+    const merged = await coalesceInserts(st);
+    const ins = merged.filter((s) => s.kind === "insert");
+    expect(ins).toHaveLength(1);
+    expect(ins[0].rows).toBe(4);
+    expect(ins[0].text).toMatch(/VALUES \(1, 'row 1'\),\s*\(2, 'row 2'\),\s*\(3, 'row 3'\),\s*\(4, 'row 4'\)$/);
+    expect(ins[0].parts).toHaveLength(4); // originals kept for exact error reporting
+    expect(merged.filter((s) => s.kind === "create_table")).toHaveLength(2); // DDL untouched
+  });
+
+  it("does not merge across different tables or different column lists, and keeps order", async () => {
+    const { coalesceInserts } = await import("@/lib/datasets/sql-import");
+    const st = await plan(create + "INSERT INTO t (id, label) VALUES (1, 'a');\nINSERT INTO t (id) VALUES (2);\nINSERT INTO u VALUES (3);\nINSERT INTO t (id, label) VALUES (4, 'd');");
+    const merged = (await coalesceInserts(st)).filter((s) => s.kind === "insert");
+    expect(merged).toHaveLength(4); // nothing adjacent shares table + column list
+  });
+
+  it("string values containing VALUES, parentheses, semicolons or quotes cannot confuse the merge", async () => {
+    const { coalesceInserts } = await import("@/lib/datasets/sql-import");
+    const st = await plan(create + `INSERT INTO t (id, label) VALUES (1, 'a VALUES (9, ''x'') ; b');\nINSERT INTO t (id, label) VALUES (2, 'it''s (fine)');`);
+    const ins = (await coalesceInserts(st)).filter((s) => s.kind === "insert");
+    expect(ins).toHaveLength(1);
+    expect(ins[0].rows).toBe(2);
+    expect(ins[0].text).toContain("'a VALUES (9, ''x'') ; b'");
+  });
+
+  it("a quoted column literally named \"values\" is handled", async () => {
+    const { coalesceInserts } = await import("@/lib/datasets/sql-import");
+    const st = await plan(`CREATE TABLE q (id integer, "values" text);\nINSERT INTO q (id, "values") VALUES (1, 'a');\nINSERT INTO q (id, "values") VALUES (2, 'b');`);
+    const ins = (await coalesceInserts(st)).filter((s) => s.kind === "insert");
+    expect(ins).toHaveLength(1);
+    expect(ins[0].rows).toBe(2);
+  });
+
+  it("caps a merged statement at 1000 rows", async () => {
+    const { coalesceInserts } = await import("@/lib/datasets/sql-import");
+    const st = await plan(create + Array.from({ length: 2500 }, (_, i) => `INSERT INTO t (id, label) VALUES (${i}, 'x');`).join("\n"));
+    const ins = (await coalesceInserts(st)).filter((s) => s.kind === "insert");
+    expect(ins.map((s) => s.rows)).toEqual([1000, 1000, 500]);
+  });
+
+  it("an existing multi-row insert is left exactly as written; a comment between statements is not part of either statement", async () => {
+    const { coalesceInserts } = await import("@/lib/datasets/sql-import");
+    const st = await plan(create + "INSERT INTO t (id, label) VALUES (1, 'a'), (2, 'b');\n-- note\nINSERT INTO t (id, label) VALUES (3, 'c');\nINSERT INTO t (id, label) VALUES (4, 'd');");
+    const ins = await coalesceInserts(st);
+    const rows = ins.filter((s) => s.kind === "insert");
+    expect(rows.map((s) => s.rows)).toEqual([2, 2]); // the multi-row one untouched; the two single-row ones merge
+    expect(rows[0].parts).toBeUndefined();
+  });
+});
