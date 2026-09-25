@@ -46,6 +46,7 @@ const int = (v: string | undefined, def: number) => {
 };
 
 export function getUploadLimits(env: Record<string, string | undefined> = process.env): UploadLimits {
+  const maxRows = int(env.DATASET_MAX_ROWS, 300_000);
   return {
     maxRequestBytes: 4 * 1024 * 1024,
     maxChunkBytes: 3.5 * 1024 * 1024,
@@ -56,8 +57,9 @@ export function getUploadLimits(env: Record<string, string | undefined> = proces
     maxTables: 30,
     maxColumnsPerTable: 60,
     maxTotalColumns: 400,
-    maxRows: int(env.DATASET_MAX_ROWS, 300_000),
-    maxSqlStatements: 60_000,
+    maxRows,
+    // A dump with one INSERT per row makes every row a statement, so this must scale with maxRows (plus room for the DDL) or it silently becomes the real row ceiling.
+    maxSqlStatements: maxRows + 10_000,
     maxNameLength: 60,
     maxDatasetsPerSession: 5,
     maxUploadsPerHour: 6,

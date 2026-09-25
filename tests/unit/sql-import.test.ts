@@ -353,3 +353,26 @@ describe("SQL upload — reserved table names (system-catalog shadowing)", () =>
     });
   }
 });
+
+describe("SQL upload — large dumps (one INSERT per row)", () => {
+  const dump = (rows: number, tail = "") =>
+    ["CREATE TABLE items (id integer PRIMARY KEY, label text);", ...Array.from({ length: rows }, (_, i) => `INSERT INTO items VALUES (${i}, 'item ${i}');`), tail].join("\n");
+
+  it("plans 100,000 single-row INSERTs quickly — planning must be linear, not quadratic in the file size (regression: a rescan per statement never finished)", async () => {
+    const started = Date.now();
+    const plan = await planSqlImport(dump(100_000), limits);
+    expect(plan.stats.rows).toBe(100_000);
+    expect(Date.now() - started).toBeLessThan(15_000); // took minutes+ when quadratic; a few seconds now
+  }, 30_000);
+
+  it("the statement limit scales with the row limit: a dump at the row limit is accepted, not rejected as 'too many statements'", () => {
+    const l = getUploadLimits({ DATASET_MAX_ROWS: "80000" });
+    expect(l.maxSqlStatements).toBeGreaterThan(l.maxRows);
+    expect(getUploadLimits({}).maxSqlStatements).toBeGreaterThan(getUploadLimits({}).maxRows);
+  });
+
+  it("still reports the correct line number for an error near the end of a big file", async () => {
+    const err = await reject(dump(20_000, "CREATE TABLE evil (id int);\nDROP TABLE items;"));
+    expect(err.details.join(" ")).toMatch(/line 20003/); // 1 CREATE + 20,000 INSERTs + 1 CREATE + the DROP on line 20003
+  }, 30_000);
+});

@@ -205,10 +205,25 @@ function checkConstraint(c: AstNode, at: number, chk: Checker, allowColumnExprs:
   if (ct === "CONSTR_CHECK") checkExpr(c.raw_expr, at, chk, { allowColumns: allowColumnExprs });
 }
 
+// Newline offsets are indexed once per buffer and binary-searched. Scanning from byte 0 on every call made planning
+// quadratic (one call per statement), so a dump with one INSERT per row never finished at realistic sizes.
+const newlineIndex = new WeakMap<Buffer, number[]>();
 const lineOf = (buf: Buffer, byteOffset: number) => {
-  let n = 1;
-  for (let i = 0; i < Math.min(byteOffset, buf.length); i++) if (buf[i] === 10) n++;
-  return n;
+  let nl = newlineIndex.get(buf);
+  if (!nl) {
+    nl = [];
+    for (let i = buf.indexOf(10); i !== -1; i = buf.indexOf(10, i + 1)) nl.push(i);
+    newlineIndex.set(buf, nl);
+  }
+  const limit = Math.min(byteOffset, buf.length);
+  let lo = 0;
+  let hi = nl.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (nl[mid] < limit) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo + 1; // newlines strictly before `limit`, plus one
 };
 
 export async function planSqlImport(sql: string, limits: UploadLimits): Promise<SqlImportPlan> {
