@@ -30,6 +30,8 @@ export interface PlannedStatement {
   table?: string;
   rows?: number;
   line: number;
+  /** Set on a merged multi-row INSERT: the original single-row statements, replayed one by one if the merged one fails (exact error line). */
+  parts?: PlannedStatement[];
 }
 
 export interface SqlImportPlan {
@@ -205,10 +207,25 @@ function checkConstraint(c: AstNode, at: number, chk: Checker, allowColumnExprs:
   if (ct === "CONSTR_CHECK") checkExpr(c.raw_expr, at, chk, { allowColumns: allowColumnExprs });
 }
 
+// Newline offsets are indexed once per buffer and binary-searched. Scanning from byte 0 on every call made planning
+// quadratic (one call per statement), so a dump with one INSERT per row never finished at realistic sizes.
+const newlineIndex = new WeakMap<Buffer, number[]>();
 const lineOf = (buf: Buffer, byteOffset: number) => {
-  let n = 1;
-  for (let i = 0; i < Math.min(byteOffset, buf.length); i++) if (buf[i] === 10) n++;
-  return n;
+  let nl = newlineIndex.get(buf);
+  if (!nl) {
+    nl = [];
+    for (let i = buf.indexOf(10); i !== -1; i = buf.indexOf(10, i + 1)) nl.push(i);
+    newlineIndex.set(buf, nl);
+  }
+  const limit = Math.min(byteOffset, buf.length);
+  let lo = 0;
+  let hi = nl.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (nl[mid] < limit) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo + 1; // newlines strictly before `limit`, plus one
 };
 
 export async function planSqlImport(sql: string, limits: UploadLimits): Promise<SqlImportPlan> {
@@ -403,4 +420,80 @@ export async function planSqlImport(sql: string, limits: UploadLimits): Promise<
   for (const k of skippedKinds) warnings.push(`Ignored: ${k}`);
 
   return { statements: planned, comments, stats: { tables: [...declared.keys()], columns: totalColumns, rows, statements: planned.length }, warnings };
+}
+
+/** Splits `INSERT INTO t (cols) VALUES (…)` into its head and tuple list, or undefined if it is not that plain shape. */
+function splitInsert(text: string): { head: string; tuples: string } | undefined {
+  let inQuotedIdent = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotedIdent) {
+      if (c === '"') {
+        if (text[i + 1] === '"') i++;
+        else inQuotedIdent = false;
+      }
+      continue;
+    }
+    if (c === '"') inQuotedIdent = true;
+    else if (c === "'" || (c === "-" && text[i + 1] === "-") || (c === "/" && text[i + 1] === "*")) return undefined; // string/comment before VALUES: not the plain shape
+    else if ((c === "v" || c === "V") && /^values(?![A-Za-z0-9_$])/i.test(text.slice(i, i + 8)) && (i === 0 || /[\s)]/.test(text[i - 1]))) {
+      const tuples = text.slice(i + 6).trim().replace(/;\s*$/, "");
+      if (!tuples.startsWith("(") || !tuples.endsWith(")")) return undefined;
+      return { head: text.slice(0, i).trim(), tuples };
+    }
+  }
+  return undefined;
+}
+
+const MERGE_MAX_ROWS = 1000;
+const MERGE_MAX_BYTES = 400_000;
+
+/**
+ * A dump usually has ONE INSERT PER ROW, and a database executes statements one at a time (~2 ms each on a hosted
+ * Postgres): 55,000 rows took 100 s to load, over a serverless function's whole time budget. This merges runs of
+ * consecutive single-row INSERTs into the same table with the same column list into multi-row INSERTs (same tuples, same
+ * order), which load orders of magnitude faster.
+ *
+ * Safety: nothing new is trusted. The tuples were already validated statement by statement in planSqlImport; here they are
+ * only concatenated, and every merged statement is re-parsed and must still be exactly one InsertStmt into the same
+ * table with exactly the expected number of rows — otherwise the original statements are kept unchanged.
+ */
+export async function coalesceInserts(statements: PlannedStatement[]): Promise<PlannedStatement[]> {
+  const out: PlannedStatement[] = [];
+  let run: { head: string; table: string; items: { st: PlannedStatement; tuples: string }[]; bytes: number } | undefined;
+
+  const flush = async () => {
+    if (!run) return;
+    const { head, table, items } = run;
+    run = undefined;
+    if (items.length === 1) return void out.push(items[0].st);
+    const text = `${head} VALUES ${items.map((i) => i.tuples).join(",")}`;
+    try {
+      const ast = (await parse(text)) as { stmts?: { stmt?: AstNode }[] };
+      const ins = ast.stmts?.length === 1 ? unwrap(ast.stmts[0].stmt, "InsertStmt") : undefined;
+      const sel = ins ? unwrap(ins.selectStmt, "SelectStmt") : undefined;
+      if (ins && sel && String((ins.relation as AstNode).relname) === table && arr(sel.valuesLists).length === items.length) {
+        out.push({ text, kind: "insert", table, rows: items.length, line: items[0].st.line, parts: items.map((i) => i.st) });
+        return;
+      }
+    } catch {
+      /* fall through: keep the originals */
+    }
+    for (const i of items) out.push(i.st);
+  };
+
+  for (const st of statements) {
+    const split = st.kind === "insert" && st.rows === 1 && st.table ? splitInsert(st.text) : undefined;
+    if (!split) {
+      await flush();
+      out.push(st);
+      continue;
+    }
+    if (run && (run.head !== split.head || run.items.length >= MERGE_MAX_ROWS || run.bytes + split.tuples.length > MERGE_MAX_BYTES)) await flush();
+    run ??= { head: split.head, table: st.table!, items: [], bytes: 0 };
+    run.items.push({ st, tuples: split.tuples });
+    run.bytes += split.tuples.length;
+  }
+  await flush();
+  return out;
 }

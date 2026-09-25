@@ -10,7 +10,7 @@ import { introspectSchema, type IntrospectedSchema } from "./introspect";
 import { getUploadLimits, ImportError, type UploadLimits } from "./limits";
 import { buildRegistryFromIntrospection, type LlmDescriptions } from "./metadata-builder";
 import { assertSafeIdent, quoteIdent } from "./sql-util";
-import { planSqlImport, type SqlImportPlan } from "./sql-import";
+import { coalesceInserts, planSqlImport, type SqlImportPlan } from "./sql-import";
 import { forgetContext, getDatasetRow, listDatasets, type Dataset } from "./store";
 import { suggestRelationships, type RelationshipSuggestion } from "./suggest-relationships";
 
@@ -236,6 +236,7 @@ async function relationsOutside(client: pg.PoolClient, schema: string): Promise<
 async function runSqlPlan(client: pg.PoolClient, plan: SqlImportPlan) {
   const BATCH_BYTES = 200_000;
   const BATCH_STATEMENTS = 300;
+  const statements = await coalesceInserts(plan.statements);
   let batch: typeof plan.statements = [];
   let bytes = 0;
 
@@ -250,7 +251,8 @@ async function runSqlPlan(client: pg.PoolClient, plan: SqlImportPlan) {
       if ((batchErr as { code?: string }).code === "57014") throw batchErr;
       // find the failing statement: roll back the batch and replay it one by one
       await client.query("ROLLBACK TO SAVEPOINT import_batch");
-      for (const s of batch) {
+      // a merged multi-row INSERT is replayed as its ORIGINAL single-row statements so the error still names the exact line
+      for (const s of batch.flatMap((b) => b.parts ?? [b])) {
         try {
           await client.query("SAVEPOINT import_one");
           await client.query(s.text);
@@ -266,7 +268,7 @@ async function runSqlPlan(client: pg.PoolClient, plan: SqlImportPlan) {
     bytes = 0;
   };
 
-  for (const s of plan.statements) {
+  for (const s of statements) {
     if (s.kind !== "insert") {
       // structure statements run on their own so order and error location stay exact; INSERTs are batched
       await flush();
@@ -308,18 +310,24 @@ async function runCsvPlan(client: pg.PoolClient, schema: string, plan: CsvImport
     const cols = t.columns.map((c) => `${quoteIdent(c.name)} ${pgTypeFor(c.type)}`).join(", ");
     await client.query(`CREATE TABLE ${qs(schema, t.name)} (${cols})`);
     if (!t.rows.length) continue;
-    const perChunk = Math.max(1, Math.floor(30_000 / t.columns.length));
+    // One text[] parameter PER COLUMN, expanded server-side with unnest() and cast to the column type. The previous form
+    // sent one bind parameter per cell (up to 30,000 per statement) inside a giant VALUES list, which is slow to parse and
+    // to transfer — ~19 s for 56,000 rows against a remote database. This keeps the same per-value casting semantics.
+    const perChunk = 20_000;
     const colList = t.columns.map((c) => quoteIdent(c.name)).join(", ");
+    const selectList = t.columns.map((c, j) => `c${j}::${CAST[c.type]}`).join(", ");
+    const aliasList = t.columns.map((_, j) => `c${j}`).join(", ");
+    const unnestList = t.columns.map((_, j) => `$${j + 1}::text[]`).join(", ");
     for (let i = 0; i < t.rows.length; i += perChunk) {
       const chunk = t.rows.slice(i, i + perChunk);
-      const params: (string | null)[] = [];
-      const tuples = chunk.map((row) => `(${row.map((v, j) => {
-        const type = t.columns[j].type;
-        params.push(v === null ? null : type === "boolean" ? String(["true", "yes"].includes(v.toLowerCase())) : v);
-        return `$${params.length}::${CAST[type]}`;
-      }).join(",")})`);
+      const params: (string | null)[][] = t.columns.map((c, j) =>
+        chunk.map((row) => {
+          const v = row[j];
+          return v === null ? null : c.type === "boolean" ? String(["true", "yes"].includes(v.toLowerCase())) : v;
+        }),
+      );
       try {
-        await client.query(`INSERT INTO ${qs(schema, t.name)} (${colList}) VALUES ${tuples.join(",")}`, params);
+        await client.query(`INSERT INTO ${qs(schema, t.name)} (${colList}) SELECT ${selectList} FROM unnest(${unnestList}) AS u(${aliasList})`, params);
       } catch (e) {
         throw new ImportError(`Loading "${t.fileName}" failed near data row ${i + 1}: ${(e as Error).message.slice(0, 200)}`);
       }

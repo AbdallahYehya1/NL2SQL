@@ -255,7 +255,7 @@ describe("POST /api/datasets/upload — streaming import and its failure modes",
     expect((await upload([])).status).toBe(400);
     const many = Array.from({ length: 11 }, (_, i) => ({ name: `f${i}.csv`, text: "id\n1\n" }));
     expect((await upload(many)).status).toBe(422);
-    expect((await upload([{ name: "big.csv", text: "id\n" + "1\n".repeat(1_200_000) }])).status).toBe(413); // > 2 MB CSV
+    expect((await upload([{ name: "big.csv", text: "id\n" + "1\n".repeat(2_200_000) }])).status).toBe(413); // > 4 MB: the one-shot route's request cap (larger files go through the chunked route)
   });
 
   it("the total upload size is enforced on the parsed files even without a Content-Length header", async () => {
@@ -264,5 +264,121 @@ describe("POST /api/datasets/upload — streaming import and its failure modes",
     const chunk = "id\n" + "1\n".repeat(950_000);
     const res = await upload(Array.from({ length: 5 }, (_, i) => ({ name: `f${i}.csv`, text: chunk })));
     expect(res.status).toBe(413);
+  });
+});
+
+describe("chunked upload — /api/datasets/upload/chunk + /finalize (files too big for one request)", () => {
+  const events = async (res: Response) => (await res.text()).trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { type: string; message?: string; dataset?: { id: string; rowCount: number; tableCount: number } });
+  const sendChunk = async (uploadId: string, fileIndex: number, fileName: string, chunkIndex: number, totalChunks: number, bytes: Uint8Array) => {
+    const { POST } = await import("@/app/api/datasets/upload/chunk/route");
+    const form = new FormData();
+    form.append("uploadId", uploadId);
+    form.append("fileIndex", String(fileIndex));
+    form.append("fileName", fileName);
+    form.append("chunkIndex", String(chunkIndex));
+    form.append("totalChunks", String(totalChunks));
+    form.append("chunk", new File([bytes as BlobPart], fileName));
+    return POST(new Request("http://localhost/api/datasets/upload/chunk", { method: "POST", body: form }));
+  };
+  const finalize = async (uploadId: string, name = "Chunked") => {
+    const { POST } = await import("@/app/api/datasets/upload/finalize/route");
+    return POST(jsonReq("/api/datasets/upload/finalize", { uploadId, name, describe: false }));
+  };
+  const chunksLeft = async (uploadId: string) => (await pool.query("SELECT count(*)::int AS n FROM nl2sql.upload_chunks WHERE upload_id = $1", [uploadId])).rows[0].n as number;
+  const uuid = () => crypto.randomUUID();
+
+  it("a CSV split into chunks (splitting a multi-byte character across a boundary) imports identically to a one-shot upload, and the staging rows are removed", async () => {
+    as(SESSION_A);
+    const csv = `id,label\n${Array.from({ length: 300 }, (_, i) => `${i},café ${i} — naïve`).join("\n")}\n`;
+    const bytes = new TextEncoder().encode(csv);
+    // pick a boundary that lands in the MIDDLE of the two-byte "é": chunks must be reassembled as bytes BEFORE decoding
+    const cut = bytes.indexOf(0xc3) + 1;
+    const id = uuid();
+    expect((await sendChunk(id, 0, "words.csv", 0, 3, bytes.slice(0, cut))).status).toBe(200);
+    expect((await sendChunk(id, 0, "words.csv", 2, 3, bytes.slice(cut + 500))).status).toBe(200); // out of order on purpose
+    expect((await sendChunk(id, 0, "words.csv", 1, 3, bytes.slice(cut, cut + 500))).status).toBe(200);
+    const res = await finalize(id, "Chunked words");
+    expect(res.headers.get("content-type")).toContain("ndjson");
+    const ev = await events(res);
+    const done = ev[ev.length - 1];
+    expect(done.type).toBe("done");
+    expect(done.dataset!.rowCount).toBe(300);
+    created.push(done.dataset!.id);
+    const check = await pool.query(`SELECT label FROM ${done.dataset!.id}.words WHERE id = 1`);
+    expect(check.rows[0].label).toBe("café 1 — naïve"); // the multi-byte characters survived reassembly intact
+    expect(await chunksLeft(id)).toBe(0);
+  });
+
+  it("re-sending a chunk is idempotent (a retry after a dropped connection never duplicates or corrupts)", async () => {
+    as(SESSION_A);
+    const id = uuid();
+    const bytes = new TextEncoder().encode("id\n1\n2\n");
+    expect((await sendChunk(id, 0, "r.csv", 0, 1, bytes)).status).toBe(200);
+    expect((await sendChunk(id, 0, "r.csv", 0, 1, bytes)).status).toBe(200);
+    expect(await chunksLeft(id)).toBe(1);
+    const ev = await events(await finalize(id, "Retry"));
+    expect(ev[ev.length - 1].type).toBe("done");
+    created.push(ev[ev.length - 1].dataset!.id);
+  });
+
+  it("finalizing with a missing chunk fails with a clear message, imports nothing, and cleans up", async () => {
+    as(SESSION_A);
+    const id = uuid();
+    await sendChunk(id, 0, "gap.csv", 0, 3, new TextEncoder().encode("id\n1\n"));
+    await sendChunk(id, 0, "gap.csv", 2, 3, new TextEncoder().encode("3\n"));
+    const before = (await pool.query("SELECT count(*)::int AS n FROM pg_namespace WHERE nspname LIKE 'ds\_%'")).rows[0].n as number;
+    const ev = await events(await finalize(id, "Gap"));
+    const last = ev[ev.length - 1];
+    expect(last.type).toBe("error");
+    expect(last.message).toMatch(/incomplete.*2\/3/i);
+    expect((await pool.query("SELECT count(*)::int AS n FROM pg_namespace WHERE nspname LIKE 'ds\_%'")).rows[0].n).toBe(before);
+    expect(await chunksLeft(id)).toBe(0);
+  });
+
+  it("another session cannot finalize (or see) an upload it did not send", async () => {
+    as(SESSION_A);
+    const id = uuid();
+    await sendChunk(id, 0, "mine.csv", 0, 1, new TextEncoder().encode("id\n1\n"));
+    as(SESSION_B);
+    const ev = await events(await finalize(id, "Stolen"));
+    expect(ev[ev.length - 1].type).toBe("error");
+    expect(ev[ev.length - 1].message).toMatch(/not found/i);
+    await pool.query("DELETE FROM nl2sql.upload_chunks WHERE upload_id = $1", [id]);
+  });
+
+  it("malformed chunk requests are rejected: bad uploadId, missing chunk, index out of range, oversize chunk", async () => {
+    as(SESSION_A);
+    const { POST } = await import("@/app/api/datasets/upload/chunk/route");
+    expect((await sendChunk("not-a-uuid", 0, "a.csv", 0, 1, new Uint8Array([49]))).status).toBe(400);
+    const noChunk = new FormData();
+    noChunk.append("uploadId", uuid());
+    noChunk.append("fileName", "a.csv");
+    noChunk.append("fileIndex", "0");
+    expect((await POST(new Request("http://localhost/x", { method: "POST", body: noChunk }))).status).toBe(400);
+    expect((await sendChunk(uuid(), 0, "a.csv", 5, 2, new Uint8Array([49]))).status).toBe(400);
+    expect((await sendChunk(uuid(), 0, "a.csv", 0, 1, new Uint8Array(3.6 * 1024 * 1024))).status).toBe(413); // above the per-chunk cap
+  });
+
+  it("the reassembled file is still held to its per-type size limit", async () => {
+    as(SESSION_A);
+    const { getUploadLimits } = await import("@/lib/datasets/limits");
+    const { reassembleFiles, storeChunk } = await import("@/lib/datasets/chunked-upload");
+    const tiny = { ...getUploadLimits(), maxCsvBytes: 1000 };
+    const id = uuid();
+    await storeChunk(pool, { uploadId: id, sessionId: SESSION_A, fileIndex: 0, fileName: "big.csv", chunkIndex: 0, totalChunks: 1, bytes: Buffer.alloc(2000, 49) }, tiny);
+    await expect(reassembleFiles(pool, id, SESSION_A, tiny)).rejects.toMatchObject({ httpStatus: 413 });
+    await pool.query("DELETE FROM nl2sql.upload_chunks WHERE upload_id = $1", [id]);
+  });
+
+  it("abandoned uploads are purged after their age limit, recent ones are kept", async () => {
+    const { purgeStaleChunks } = await import("@/lib/datasets/chunked-upload");
+    const oldId = uuid();
+    const newId = uuid();
+    for (const id of [oldId, newId]) await pool.query(`INSERT INTO nl2sql.upload_chunks (upload_id, session_id, file_index, file_name, chunk_index, total_chunks, chunk_bytes) VALUES ($1,'s',0,'a.csv',0,1,'\x31')`, [id]);
+    await pool.query("UPDATE nl2sql.upload_chunks SET created_at = now() - interval '5 hours' WHERE upload_id = $1", [oldId]);
+    await purgeStaleChunks(pool, 2);
+    expect(await chunksLeft(oldId)).toBe(0);
+    expect(await chunksLeft(newId)).toBe(1);
+    await pool.query("DELETE FROM nl2sql.upload_chunks WHERE upload_id = $1", [newId]);
   });
 });

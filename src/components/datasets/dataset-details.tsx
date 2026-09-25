@@ -1,11 +1,11 @@
 "use client";
 
-import { ArrowLeft, Check, KeyRound, Link2, Loader2, Sparkles, Trash2 } from "lucide-react";
+import { BarChart3, Check, KeyRound, Link2, Loader2, MessageSquare, Sparkles, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PrivacyNotice } from "./privacy-notice";
@@ -91,10 +91,6 @@ export function DatasetDetails({ id }: { id: string }) {
 
   return (
     <div className="mx-auto w-full max-w-4xl flex-1 space-y-6 px-4 py-6 sm:px-6 lg:py-10">
-      <Link href="/datasets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" aria-hidden /> All datasets
-      </Link>
-
       {error && !data ? (
         <div role="alert" className="rounded-xl border border-danger/30 bg-danger-bg p-4 text-sm text-danger">
           {error}
@@ -126,6 +122,20 @@ export function DatasetDetails({ id }: { id: string }) {
             </div>
           ) : (
             <>
+              {d.status === "ready" && (
+                <div className="rounded-2xl border border-border bg-card p-5 sm:p-6">
+                  <p className="text-sm text-muted-foreground">Explore your data and discover insights.</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Link href={`/datasets/${id}/dashboard`} className={buttonVariants({ size: "md" })}>
+                      <BarChart3 className="h-4 w-4" aria-hidden /> View Dashboard
+                    </Link>
+                    <Link href={`/datasets/${id}/ask`} className={buttonVariants({ variant: "outline", size: "md" })}>
+                      <MessageSquare className="h-4 w-4" aria-hidden /> Ask a Question
+                    </Link>
+                  </div>
+                </div>
+              )}
+
               <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <Metric label="Tables" value={fmt.format(d.tableCount)} />
                 <Metric label="Columns" value={fmt.format(d.columnCount)} />
@@ -137,8 +147,8 @@ export function DatasetDetails({ id }: { id: string }) {
 
               <div className="flex flex-wrap gap-2">
                 {d.status === "ready" && (
-                  <Button onClick={useDataset} disabled={busy !== null}>
-                    {busy === "use" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Check className="h-4 w-4" aria-hidden />} Use This Dataset
+                  <Button variant="outline" onClick={useDataset} disabled={busy !== null}>
+                    {busy === "use" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Check className="h-4 w-4" aria-hidden />} Use on Main Page
                   </Button>
                 )}
                 {!d.isBuiltin &&
