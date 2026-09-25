@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { ShieldAlert } from "lucide-react";
 import { detectKpi, detectVisualization } from "@/components/charts/detect";
 import { ChartView } from "@/components/charts/chart-view";
 import { ExecutionTrace } from "@/components/execution-trace/execution-trace";
@@ -8,6 +9,7 @@ import { ResultTable } from "@/components/result-table/result-table";
 import { Button } from "@/components/ui/button";
 import type { QueryResponse } from "@/lib/types";
 import { AdvancedDetails, type DetailsTab } from "./advanced-details";
+import { AiExplanationNotice, RateLimitBlocker } from "./rate-limit-notice";
 import { InsightCard } from "./insight-card";
 import { SupportingInfo } from "./supporting-info";
 
@@ -17,6 +19,37 @@ export function Notice({ tone, title, children }: { tone: "danger" | "warning" |
     <div role={tone === "danger" ? "alert" : "status"} className={`animate-result-in rounded-xl border p-4 ${styles}`}>
       <p className="text-sm font-semibold">{title}</p>
       <div className="mt-1 text-sm">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Calm, non-accusatory treatment for a request the backend's security layer blocked (a write attempt, or SQL the
+ * validator rejected). No red/alarm styling and no exposure of the validator's internals — only the safe, already
+ * user-facing message plus a short reassurance and a way to try something else.
+ */
+function SecurityNotice({ title, message, examples, onPick }: { title: string; message: string; examples: string[]; onPick: (q: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div role="status" className="animate-result-in space-y-3 rounded-2xl border border-border bg-card p-5 sm:p-6">
+      <div className="flex items-center gap-2 text-foreground">
+        <ShieldAlert className="h-4 w-4 text-primary" aria-hidden />
+        <p className="text-sm font-semibold">{title}</p>
+      </div>
+      <p className="text-sm text-muted-foreground">Your data has not been changed.</p>
+      <button type="button" onClick={() => setExpanded((v) => !v)} className="text-xs font-medium text-primary underline-offset-2 hover:underline">
+        {expanded ? "Hide details" : "Why was this blocked?"}
+      </button>
+      {expanded && <p className="text-sm text-muted-foreground">{message}</p>}
+      {examples.length > 0 && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {examples.slice(0, 3).map((q) => (
+            <Button key={q} variant="outline" size="sm" onClick={() => onPick(q)}>
+              {q}
+            </Button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -77,6 +110,9 @@ export function ResultView(p: ResultViewProps) {
   const hasTrace = Boolean(result.trace && (result.trace.attempts.length > 0 || result.trace.routing || result.trace.intent));
 
   if (result.status === "out_of_scope") {
+    if (result.scopeKind === "write_blocked") {
+      return <SecurityNotice title="Request blocked" message={result.answer} examples={p.examples} onPick={p.onPick} />;
+    }
     return (
       <Notice tone="accent" title="Outside the database domain">
         <p>{result.answer}</p>
@@ -109,6 +145,12 @@ export function ResultView(p: ResultViewProps) {
   }
 
   if (!result.success) {
+    if (result.error?.code === "PROVIDER_RATE_LIMIT" || result.error?.code === "RATE_LIMITED") {
+      return <RateLimitBlocker error={result.error} onRetry={() => p.onPick(p.originalQuestion)} />;
+    }
+    if (result.error?.code === "SQL_REJECTED") {
+      return <SecurityNotice title="This request could not be completed safely" message={result.answer} examples={p.examples} onPick={p.onPick} />;
+    }
     return (
       <div className="space-y-4">
         <Notice tone="danger" title={errorTitle(result.error?.code)}>
@@ -128,6 +170,7 @@ export function ResultView(p: ResultViewProps) {
 
   return (
     <div className="space-y-6 rounded-2xl border border-border bg-card p-5 sm:p-6">
+      {result.aiNotice && <AiExplanationNotice notice={result.aiNotice} onRetry={() => p.onPick(p.originalQuestion)} />}
       <InsightCard answer={result.answer} keyPoints={result.keyPoints} kpi={kpi} runId={result.runId} feedback={p.feedback} onFeedback={p.onFeedback} />
 
       {!noResults && vizSpec && !(kpi && result.rows.length === 1) && (

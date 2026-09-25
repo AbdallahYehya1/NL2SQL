@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deterministicSummary, formatResult, isGrounded, NO_RESULTS_MESSAGE } from "@/lib/ai/result-formatter";
+import { ProviderError } from "@/lib/ai/provider";
 import { ScriptedProvider } from "../helpers/scripted-provider";
 
 const rows = [
@@ -82,9 +83,21 @@ describe("formatResult", () => {
 
   it("falls back (without failing) when the model errors", async () => {
     const provider = new ScriptedProvider({ "result summary": [new Error("boom")] });
-    const { formatted } = await formatResult({ ...base, provider, mode: "llm" });
+    const { formatted, notice } = await formatResult({ ...base, provider, mode: "llm" });
     expect(formatted.summarySource).toBe("deterministic");
     expect(formatted.rows).toEqual(rows);
+    expect(notice).toBeUndefined(); // a generic error, not a rate limit — no rate-limit notice invented
+  });
+
+  it("attaches a rate-limit notice (with the real header-derived timing) only when the failure was PROVIDER_RATE_LIMIT", async () => {
+    const rateLimit = { limitType: "REQUESTS_PER_MINUTE" as const, retryAfterSeconds: 18, resetAt: "2026-09-23T12:00:18.000Z" };
+    const provider = new ScriptedProvider({ "result summary": [new ProviderError("PROVIDER_RATE_LIMIT", "rate limited", 429, rateLimit)] });
+    const { formatted, notice } = await formatResult({ ...base, provider, mode: "llm" });
+    expect(formatted.summarySource).toBe("deterministic");
+    expect(formatted.rows).toEqual(rows); // the data is untouched — only the explanation failed
+    expect(notice?.retryAfterSeconds).toBe(18);
+    expect(notice?.limitType).toBe("REQUESTS_PER_MINUTE");
+    expect(notice?.resetAt).toBe(rateLimit.resetAt);
   });
 
   it("returns the rows and columns unchanged", async () => {

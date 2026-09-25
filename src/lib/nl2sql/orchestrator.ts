@@ -23,6 +23,7 @@ import type {
   GeneratedSql,
   QueryResponse,
   QuestionIntent,
+  RateLimitInfo,
   RoutingResult,
   RunStatus,
   SubSchema,
@@ -52,6 +53,8 @@ export interface QueryExecutionState {
   correctionAttempts: CorrectionAttempt[];
   attempts: number;
   formatted?: FormattedResult;
+  /** Set when the AI explanation step itself failed (e.g. rate-limited) but the query's rows are still valid. */
+  aiNotice?: { message: string } & Partial<RateLimitInfo>;
   trace: AgentTrace;
   /** The dataset every stage runs against. */
   dataset?: { id: string; name: string };
@@ -77,6 +80,7 @@ export class PipelineError extends Error {
   constructor(
     readonly code: ErrorCode,
     message: string,
+    readonly rateLimit?: RateLimitInfo,
   ) {
     super(message);
     this.name = "PipelineError";
@@ -107,7 +111,7 @@ const today = (deps: OrchestratorDeps) => (deps.now?.() ?? new Date()).toISOStri
 
 export function mapProviderError(err: unknown): PipelineError {
   if (err instanceof PipelineError) return err;
-  if (err instanceof ProviderError) return new PipelineError(err.code, err.message);
+  if (err instanceof ProviderError) return new PipelineError(err.code, err.message, err.rateLimit);
   return new PipelineError("INTERNAL", "Something went wrong while processing the question.");
 }
 
@@ -247,7 +251,7 @@ const normaliseSql = (s: string) => s.replace(/\s+/g, " ").replace(/;\s*$/, "").
 export async function stageFormat(state: QueryExecutionState, deps: OrchestratorDeps) {
   const exec = state.execution;
   if (!exec || !exec.success) return;
-  const { formatted, llmCall } = await timed(state, "formatting", () =>
+  const { formatted, llmCall, notice } = await timed(state, "formatting", () =>
     formatResult({
       question: state.question,
       explanation: state.generated?.explanation ?? "",
@@ -262,6 +266,7 @@ export async function stageFormat(state: QueryExecutionState, deps: Orchestrator
   );
   state.formatted = formatted;
   if (llmCall) state.trace.llmCalls.push(llmCall);
+  if (notice) state.aiNotice = notice;
 }
 
 /** A model call that threw (rate limit, bad output, ...) is still part of the trace. */
@@ -317,13 +322,14 @@ function successResponse(state: QueryExecutionState, started: number): QueryResp
     truncated: exec.truncated,
     executionTimeMs: exec.executionTimeMs,
   });
+  if (state.aiNotice) res.aiNotice = { code: "AI_UNAVAILABLE", ...state.aiNotice };
   state.trace.finalAnswer = formatted.summary;
   return res;
 }
 
 function errorResponse(state: QueryExecutionState, started: number, err: PipelineError): QueryResponse {
   const res = baseResponse(state, started, "error", err.message);
-  res.error = { code: err.code, message: err.message };
+  res.error = { code: err.code, message: err.message, ...err.rateLimit };
   res.sql = state.currentSql;
   state.trace.error = { code: err.code, message: err.message };
   return res;
@@ -386,6 +392,7 @@ export async function processQuestion(input: unknown, ctx: RunContext = {}, over
     if (decision === "out_of_scope") {
       const isWrite = /read-only|write|modify|raw SQL/i.test(state.intent?.scopeReason ?? "");
       response = baseResponse(state, started, "out_of_scope", isWrite ? readOnlyMessage(dataset) : outOfScopeMessage(dataset));
+      response.scopeKind = isWrite ? "write_blocked" : "unrelated";
       state.trace.finalAnswer = response.answer;
     } else if (decision === "needs_clarification") {
       const question = state.intent!.clarificationQuestion ?? "Could you clarify which measure you mean?";
@@ -405,6 +412,7 @@ export async function processQuestion(input: unknown, ctx: RunContext = {}, over
     recordFailedModelCall(state, err);
     if (pe.code === "OUT_OF_SCOPE") {
       response = baseResponse(state, started, "out_of_scope", pe.message);
+      response.scopeKind = "unrelated"; // stageRoute throws this when no table in the schema matched the question at all
       state.trace.finalAnswer = pe.message;
     } else {
       if (pe.code === "INTERNAL") console.error("[nl2sql] unexpected pipeline error:", err);

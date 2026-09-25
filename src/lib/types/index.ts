@@ -307,6 +307,23 @@ export type ErrorCode =
   | "RATE_LIMITED"
   | "INTERNAL";
 
+/**
+ * Which quota was actually exhausted, read from the provider's own response — never guessed. "UNKNOWN" when the
+ * response didn't carry enough information to classify it (e.g. a 429 with no rate-limit headers at all).
+ */
+export type RateLimitType = "REQUESTS_PER_MINUTE" | "REQUESTS_PER_DAY" | "TOKENS_PER_MINUTE" | "TOKENS_PER_DAY" | "UNKNOWN";
+
+/** Real, provider-reported timing only — omitted entirely rather than filled with a guess. */
+export interface RateLimitInfo {
+  limitType: RateLimitType;
+  retryAfterSeconds?: number;
+  /** ISO timestamp; `Date.now() + retryAfterSeconds * 1000` at the moment the error was produced. */
+  resetAt?: string;
+}
+
+/** Why the question ended up "out_of_scope" — lets the UI use calmer, more specific wording without re-deriving the backend's decision. */
+export type ScopeKind = "write_blocked" | "unrelated";
+
 export interface QueryResponse {
   success: boolean;
   status: RunStatus;
@@ -328,6 +345,14 @@ export interface QueryResponse {
   attempts: number;
   corrections: CorrectionAttempt[];
   clarification?: { question: string; options: string[] };
-  error?: { code: ErrorCode; message: string };
+  /** Only set when status === "out_of_scope". */
+  scopeKind?: ScopeKind;
+  error?: (Omit<RateLimitInfo, "limitType"> & { code: ErrorCode; message: string; limitType?: RateLimitType });
+  /**
+   * The query executed successfully and its rows/columns are real, but the AI explanation step itself failed
+   * (e.g. rate-limited) — `answer`/`keyPoints` are still populated (the deterministic fallback), this is only
+   * a small notice so the UI can say the AI explanation specifically was unavailable without hiding good data.
+   */
+  aiNotice?: { code: "AI_UNAVAILABLE"; message: string } & Partial<RateLimitInfo>;
   trace: AgentTrace;
 }

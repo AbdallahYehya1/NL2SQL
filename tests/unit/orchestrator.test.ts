@@ -222,6 +222,38 @@ describe("orchestrator", () => {
       expect(res.rows).toHaveLength(1);
     });
 
+    it("carries structured rate-limit info through to the error response", async () => {
+      const { ProviderError } = await import("@/lib/ai/provider");
+      const rateLimit = { limitType: "REQUESTS_PER_MINUTE" as const, retryAfterSeconds: 18, resetAt: "2026-09-23T12:00:18.000Z" };
+      const provider = new ScriptedProvider({ "question analysis": [new ProviderError("PROVIDER_RATE_LIMIT", "rate limited", 429, rateLimit)] });
+      const { res } = await run(provider, async () => okExec());
+      expect(res.error?.code).toBe("PROVIDER_RATE_LIMIT");
+      expect(res.error?.retryAfterSeconds).toBe(18);
+      expect(res.error?.limitType).toBe("REQUESTS_PER_MINUTE");
+      expect(res.error?.resetAt).toBe(rateLimit.resetAt);
+    });
+
+    // CRITICAL FALLBACK: the SQL already executed successfully — a rate limit on the AI *explanation* step must never
+    // turn a good result into a blank error screen. The rows/columns stay real; only a small notice is attached.
+    it("query succeeded but the AI explanation was rate-limited: rows stay intact and aiNotice is set (never a blank error)", async () => {
+      const { ProviderError } = await import("@/lib/ai/provider");
+      const llmConfig = loadConfig({ SUMMARY_MODE: "llm" });
+      const rateLimit = { limitType: "TOKENS_PER_DAY" as const, retryAfterSeconds: 3600, resetAt: "2026-09-24T00:00:00.000Z" };
+      const provider = new ScriptedProvider({
+        "question analysis": [analysisOk()],
+        "SQL generation": [sqlAnswer(GOOD_SQL)],
+        "result summary": [new ProviderError("PROVIDER_RATE_LIMIT", "rate limited", 429, rateLimit)],
+      });
+      const { res } = await run(provider, async () => okExec([{ category: "Computers", revenue: 100 }]), QUESTION, { config: llmConfig });
+      expect(res.success).toBe(true);
+      expect(res.status).toBe("success");
+      expect(res.rows).toEqual([{ category: "Computers", revenue: 100 }]);
+      expect(res.answer.length).toBeGreaterThan(0); // deterministic fallback summary, never blank
+      expect(res.aiNotice?.code).toBe("AI_UNAVAILABLE");
+      expect(res.aiNotice?.limitType).toBe("TOKENS_PER_DAY");
+      expect(res.aiNotice?.retryAfterSeconds).toBe(3600);
+    });
+
     it("keeps working when the history store fails", async () => {
       const provider = new ScriptedProvider({ "question analysis": [analysisOk()], "SQL generation": [sqlAnswer(GOOD_SQL)] });
       const store: RunStore = { save: async () => { throw new Error("db down"); } };

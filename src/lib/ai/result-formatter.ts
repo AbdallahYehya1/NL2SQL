@@ -1,7 +1,7 @@
 import { z } from "zod";
-import type { AIProvider } from "./provider";
+import { ProviderError, type AIProvider } from "./provider";
 import { buildResultInterpretationPrompt } from "./prompts/result-interpretation";
-import type { FormattedResult, LlmCallRecord } from "@/lib/types";
+import type { FormattedResult, LlmCallRecord, RateLimitInfo } from "@/lib/types";
 
 export const NO_RESULTS_MESSAGE = "No matching records were found.";
 
@@ -90,6 +90,13 @@ export function isGrounded(text: string, rows: Record<string, unknown>[], totalR
   return true;
 }
 
+export interface FormatResultOutput {
+  formatted: FormattedResult;
+  llmCall?: LlmCallRecord;
+  /** Set only when the summary fell back to deterministic because the AI call itself failed (not merely "no rows" / deterministic mode). */
+  notice?: { message: string } & Partial<RateLimitInfo>;
+}
+
 export async function formatResult(input: {
   question: string;
   explanation: string;
@@ -98,7 +105,7 @@ export async function formatResult(input: {
   truncated: boolean;
   provider?: AIProvider;
   mode: "llm" | "deterministic";
-}): Promise<{ formatted: FormattedResult; llmCall?: LlmCallRecord }> {
+}): Promise<FormatResultOutput> {
   const base = deterministicSummary(input.columns, input.rows, input.truncated);
   const fallback: FormattedResult = { ...base, columns: input.columns, rows: input.rows, summarySource: "deterministic" };
   if (input.rows.length === 0 || input.mode === "deterministic" || !input.provider) return { formatted: fallback };
@@ -125,6 +132,11 @@ export async function formatResult(input: {
     };
   } catch (err) {
     // The data is already correct; a failed summary must not fail the request.
-    return { formatted: fallback, llmCall: { purpose: "result_formatting", model: input.provider.model, latencyMs: Date.now() - started, ok: false, error: (err as Error).message.slice(0, 200) } };
+    const llmCall: LlmCallRecord = { purpose: "result_formatting", model: input.provider.model, latencyMs: Date.now() - started, ok: false, error: (err as Error).message.slice(0, 200) };
+    const notice =
+      err instanceof ProviderError && err.code === "PROVIDER_RATE_LIMIT"
+        ? { message: "AI explanation temporarily unavailable — the results below are still accurate.", ...err.rateLimit }
+        : undefined;
+    return { formatted: fallback, llmCall, notice };
   }
 }
