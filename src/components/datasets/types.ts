@@ -41,7 +41,10 @@ export interface DatasetDetailsDto {
 }
 
 export interface UploadLimitsDto {
+  /** Below this, the simple one-shot upload is used; at/above it, files are sent in chunks. */
   maxRequestMb: number;
+  maxChunkMb: number;
+  maxSqlMb: number;
   maxCsvMb: number;
   maxFiles: number;
   maxTables: number;

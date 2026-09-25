@@ -69,7 +69,7 @@ The **whole file is parsed and checked against an allow-list before anything run
 *"This SQL file contains unsupported statements."* and nothing is executed. Accepted files are loaded into a fresh schema `ds_<hex>` with its own read-only role. CSV relationships are **only suggested**
 (with evidence from the data) and become foreign keys only after you confirm them.
 
-**Limits (deliberately small):** 4 MB per upload, 2 MB per CSV, 10 files, 30 tables, 400 columns, 50,000 rows, 45 s import, 5 datasets per browser session, 72 h lifetime.
+**Limits (demo-sized):** 40 MB per CSV/SQL file (files ≥ 4 MB upload automatically in chunks), 10 files, 30 tables, 400 columns, 300,000 rows, 45 s import, 5 datasets per browser session, 72 h lifetime.
 **Synthetic, mock or non-sensitive data only.** Full details, supported syntax and the privacy model: [docs/DATASET_UPLOAD.md](docs/DATASET_UPLOAD.md).
 
 ## Security

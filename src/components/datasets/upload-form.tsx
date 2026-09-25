@@ -26,6 +26,44 @@ const emptySteps = (): Record<StepId, StepState> => Object.fromEntries(STEPS.map
 const kb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 const ext = (f: File) => f.name.toLowerCase().split(".").pop();
 
+/**
+ * Sends every file in small pieces instead of one request: Vercel rejects request bodies over 4.5 MB, so a file at
+ * or above limits.maxRequestMb is split into limits.maxChunkMb-sized pieces (a small safety margin under the
+ * server's own per-chunk cap), POSTed sequentially, and reassembled server-side — see chunked-upload.ts. Returns the
+ * same NDJSON stream Response the single-shot route returns, so the caller reads it identically either way.
+ */
+async function uploadChunked(files: File[], name: string, describe: boolean, limits: UploadLimitsDto, onProgress: (loaded: number, total: number) => void): Promise<Response> {
+  const uploadId = crypto.randomUUID();
+  const chunkBytes = Math.max(256 * 1024, Math.floor(limits.maxChunkMb * 1024 * 1024 * 0.9));
+  const total = files.reduce((n, f) => n + f.size, 0);
+  let loaded = 0;
+
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+    const file = files[fileIndex];
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkBytes));
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      const start = chunkIndex * chunkBytes;
+      const blob = file.slice(start, start + chunkBytes);
+      const form = new FormData();
+      form.append("uploadId", uploadId);
+      form.append("fileIndex", String(fileIndex));
+      form.append("fileName", file.name);
+      form.append("chunkIndex", String(chunkIndex));
+      form.append("totalChunks", String(totalChunks));
+      form.append("chunk", blob, file.name);
+      const res = await fetch("/api/datasets/upload/chunk", { method: "POST", body: form });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? `"${file.name}" failed to upload.`);
+      }
+      loaded += blob.size;
+      onProgress(loaded, total);
+    }
+  }
+
+  return fetch("/api/datasets/upload/finalize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ uploadId, name, describe }) });
+}
+
 export function UploadForm() {
   const router = useRouter();
   const inputId = useId();
@@ -40,6 +78,7 @@ export function UploadForm() {
   const [failure, setFailure] = useState<{ message: string; details: string[] } | null>(null);
   const [done, setDone] = useState<DatasetDto | null>(null);
   const [limits, setLimits] = useState<UploadLimitsDto | undefined>();
+  const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null);
 
   useEffect(() => {
     fetch("/api/datasets")
@@ -56,8 +95,10 @@ export function UploadForm() {
     if (sql && csv) return "Upload either one .sql file or CSV files — not both.";
     if (sql > 1) return "Upload a single .sql file per dataset.";
     if (limits && files.length > limits.maxFiles) return `At most ${limits.maxFiles} files.`;
-    if (limits && files.reduce((n, f) => n + f.size, 0) > limits.maxRequestMb * 1024 * 1024) return `The files together may be at most ${limits.maxRequestMb} MB.`;
+    // Files at/above maxRequestMb switch to chunked upload automatically (see submit()) — only each file's own
+    // (much larger) type limit is a hard stop, not the combined total.
     if (limits && files.some((f) => ext(f) === "csv" && f.size > limits.maxCsvMb * 1024 * 1024)) return `Each CSV file may be at most ${limits.maxCsvMb} MB.`;
+    if (limits && files.some((f) => ext(f) === "sql" && f.size > limits.maxSqlMb * 1024 * 1024)) return `The SQL file may be at most ${limits.maxSqlMb} MB.`;
     return null;
   })();
 
@@ -75,12 +116,22 @@ export function UploadForm() {
     setFailure(null);
     setDone(null);
     setSteps(emptySteps());
-    const form = new FormData();
-    files.forEach((f) => form.append("files", f));
-    form.append("name", name);
-    form.append("describe", String(describe));
+    setUploadProgress(null);
+    const totalBytes = files.reduce((n, f) => n + f.size, 0);
+    const chunked = Boolean(limits) && totalBytes >= limits!.maxRequestMb * 1024 * 1024;
     try {
-      const res = await fetch("/api/datasets/upload", { method: "POST", body: form });
+      let res: Response;
+      if (chunked) {
+        setUploadProgress({ loaded: 0, total: totalBytes });
+        res = await uploadChunked(files, name, describe, limits!, (loaded, total) => setUploadProgress({ loaded, total }));
+      } else {
+        const form = new FormData();
+        files.forEach((f) => form.append("files", f));
+        form.append("name", name);
+        form.append("describe", String(describe));
+        res = await fetch("/api/datasets/upload", { method: "POST", body: form });
+      }
+      setUploadProgress(null);
       if (!res.body || !(res.headers.get("content-type") ?? "").includes("ndjson")) {
         const data = await res.json().catch(() => ({}));
         setFailure({ message: data.error ?? "The upload was rejected.", details: [] });
@@ -104,9 +155,13 @@ export function UploadForm() {
           else if (ev.type === "error") setFailure({ message: ev.message, details: ev.details ?? [] });
         }
       }
-    } catch {
-      setFailure({ message: "The upload could not be completed. Check your connection and try again.", details: [] });
+    } catch (err) {
+      // A chunk-upload failure (e.g. a specific file rejected) throws a real Error with a useful message; a network
+      // drop throws something else, so it gets the generic fallback instead of a raw "Failed to fetch".
+      const message = err instanceof Error && chunked ? err.message : "The upload could not be completed. Check your connection and try again.";
+      setFailure({ message, details: [] });
     } finally {
+      setUploadProgress(null);
       setBusy(false);
     }
   }
@@ -147,8 +202,9 @@ export function UploadForm() {
 
           {limits && (
             <p className="text-xs text-muted-foreground">
-              Limits: up to {limits.maxFiles} files · {limits.maxRequestMb} MB total ({limits.maxCsvMb} MB per CSV) · {limits.maxTables} tables · {limits.maxColumnsPerTable} columns per table ·{" "}
-              {limits.maxRows.toLocaleString("en-US")} rows in total · {limits.maxDatasetsPerSession} datasets per browser.
+              Limits: up to {limits.maxFiles} files · {limits.maxCsvMb} MB per CSV file, {limits.maxSqlMb} MB for the SQL file · {limits.maxTables} tables · {limits.maxColumnsPerTable} columns per table ·{" "}
+              {limits.maxRows.toLocaleString("en-US")} rows in total · {limits.maxDatasetsPerSession} datasets per browser. Files at or above {limits.maxRequestMb} MB are uploaded automatically in smaller
+              pieces — no extra steps needed.
             </p>
           )}
 
@@ -192,7 +248,7 @@ export function UploadForm() {
           <div className="flex justify-end">
             <Button type="button" onClick={submit} disabled={busy || files.length === 0 || Boolean(problem)}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
-              {busy ? "Importing…" : "Upload"}
+              {uploadProgress ? "Uploading…" : busy ? "Importing…" : "Upload"}
             </Button>
           </div>
         </CardContent>
@@ -201,9 +257,19 @@ export function UploadForm() {
       {started && (
         <Card>
           <CardHeader>
-            <CardTitle>{done ? "Dataset ready." : failure ? "Dataset import failed." : "Analyzing dataset…"}</CardTitle>
+            <CardTitle>{done ? "Dataset ready." : failure ? "Dataset import failed." : uploadProgress ? "Uploading…" : "Analyzing dataset…"}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4" aria-live="polite">
+            {uploadProgress && (
+              <div className="space-y-1.5">
+                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full bg-primary transition-[width] duration-200" style={{ width: `${Math.round((uploadProgress.loaded / Math.max(1, uploadProgress.total)) * 100)}%` }} />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {kb(uploadProgress.loaded)} of {kb(uploadProgress.total)} uploaded ({Math.round((uploadProgress.loaded / Math.max(1, uploadProgress.total)) * 100)}%)
+                </p>
+              </div>
+            )}
             <ol className="space-y-1.5 text-sm">
               {STEPS.map((s) => {
                 const st = steps[s.id];

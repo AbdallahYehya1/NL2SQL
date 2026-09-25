@@ -26,6 +26,8 @@ function publicLimits() {
   const l = getUploadLimits();
   return {
     maxRequestMb: l.maxRequestBytes / 1024 / 1024,
+    maxChunkMb: l.maxChunkBytes / 1024 / 1024,
+    maxSqlMb: l.maxSqlBytes / 1024 / 1024,
     maxCsvMb: l.maxCsvBytes / 1024 / 1024,
     maxFiles: l.maxFiles,
     maxTables: l.maxTables,

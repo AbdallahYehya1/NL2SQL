@@ -129,10 +129,10 @@ Nothing extra to configure, but note:
   project (role creation, grants, RLS, query through the read-only login, deletion) — see the verification table above.
 * Roles are cluster-level objects: the app drops them when a dataset is deleted or expires (72 h, `DATASET_TTL_HOURS`; expiry runs
   opportunistically on each upload). If you ever drop the database by hand, also drop `nl2sql_ro_*` roles (`db:reset` does it for you).
-* **Vercel limits:** request bodies are capped at 4.5 MB, so uploads are capped at 4 MB; the import runs inside one `maxDuration = 60`
+* **Vercel limits:** request bodies are capped at 4.5 MB per request, so larger files are uploaded in 3.5 MB chunks (needs migration `20260101000006_upload_chunks.sql` — run `npm run db:migrate` against Supabase); the import runs inside one `maxDuration = 60`
   function with a 45 s database timeout (50,000 rows max). The upload response streams progress, which keeps the function alive.
   Larger datasets would need a queue/worker or object storage — out of scope.
-* Storage: each dataset is small (≤ 4 MB of input); the free tier is not a concern with the 5-datasets-per-session and 72 h limits.
+* Storage: each dataset is bounded (≤ 40 MB per file, ≤ 300k rows); the free tier is not a concern with the 5-datasets-per-session and 72 h limits.
 * Use `READONLY_DATABASE_URL` as before; dataset roles are reached with `SET LOCAL ROLE` from it.
 
 ### Reset

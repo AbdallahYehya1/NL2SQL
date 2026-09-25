@@ -64,9 +64,10 @@ any reference to another schema (`nl2sql.*`, `other.*`, `db.public.*`), sub-quer
 
 | Limit | Value | Why |
 |-------|------:|-----|
-| Whole upload | 4 MB | Vercel serverless request bodies are capped at 4.5 MB |
-| `.sql` file | 4 MB | |
-| CSV file | 2 MB each | |
+| One request | 4 MB | Vercel serverless request bodies are capped at 4.5 MB. Files at/above this are sent in 3.5 MB chunks (see below) |
+| `.sql` file | 40 MB | `DATASET_MAX_SQL_MB` |
+| CSV file | 40 MB each | `DATASET_MAX_CSV_MB` |
+| Rows (all tables) | 300,000 | `DATASET_MAX_ROWS` |
 | Files per upload | 10 | |
 | Tables / dataset | 30 | |
 | Columns / table · total | 60 · 400 | |
@@ -187,9 +188,15 @@ selector, shows **Querying: \<dataset\>**, and switching datasets swaps the sche
 ## Vercel
 
 Everything runs inside ordinary serverless requests: no filesystem, no worker, no Docker. Consequences (deliberate, documented limits):
-uploads ≤ 4 MB and ≤ 50k rows so the import fits in one 60 s invocation; the import request must stay open (progress streaming
+rows are capped so the import fits in one 60 s invocation (a bigger file that doesn't fit fails cleanly with "Import took too long", nothing kept); the import request must stay open (progress streaming
 keeps it alive); a function killed mid-import leaves a `processing` row that is reported as failed and cleaned up by the transaction
-rollback. Large files would need a queue/worker or Supabase Storage + background job, which is out of scope.
+rollback. **Chunked upload.** The 4.5 MB limit applies to a single request, not to a file. A file of 4 MB or more is split in the browser
+into 3.5 MB chunks, POSTed one request at a time to `/api/datasets/upload/chunk`, and stored in `nl2sql.upload_chunks`
+(migration `..._upload_chunks.sql`, keyed by upload id + owning session). `/api/datasets/upload/finalize` verifies every chunk
+arrived, joins them as raw bytes (so a multi-byte UTF-8 character split across chunks is intact), checks the per-type size limit,
+then runs the same `importDataset()` as a one-shot upload, with the same streaming progress. Chunk rows are deleted after finalize
+(success or failure); abandoned uploads are purged after 2 hours. Database-scale (hundreds of MB, millions of rows) migrations
+would still need a queue/worker or Supabase Storage + background job, which is out of scope.
 
 ## Limitations
 
